@@ -112,21 +112,53 @@ def generate_notebook(repo_root: Optional[Path] = None) -> Dict[str, Any]:
         )
     )
 
-    # 3. Optional Google Drive Mount
+    # 1b. Single Configuration Cell
+    cells.append(
+        _make_markdown_cell(
+            "## 1b. Cấu hình chung cho toàn bộ notebook\n"
+            "\n"
+            "Tất cả các cờ cấu hình runtime được thiết lập duy nhất tại cell này. "
+            "Nếu gặp lỗi OOM hoặc muốn chạy chế độ nhẹ nhất (chỉ SAM 3), đặt `ENABLE_QWEN = False` tại đây "
+            "rồi chạy lần lượt các cell tiếp theo.",
+            next_id("h_config"),
+        )
+    )
+    cells.append(
+        _make_code_cell(
+            "# ==============================================================================\n"
+            "# CẤU HÌNH RUNTIME CHUNG (Chỉnh sửa tại đây và không gán lại ở các cell sau)\n"
+            "# ==============================================================================\n"
+            "ENABLE_QWEN = True               # Bật/tắt Qwen Prompt Assistant\n"
+            "QWEN_MIN_FREE_VRAM_GB = 5.0     # Ngưỡng VRAM trống tối thiểu để nạp Qwen (GB)\n"
+            "USE_DRIVE_CACHE = False          # Lưu checkpoint Hugging Face vào Google Drive\n"
+            "MAX_UPLOAD_MB = 20               # Giới hạn dung lượng file ảnh upload (MB)\n"
+            "DEFAULT_THRESHOLD = 0.35         # Ngưỡng confidence threshold mặc định cho SAM 3\n"
+            "SAM_DEVICE = \"cuda\"              # Thiết bị chạy SAM 3 (\"cuda\" hoặc \"cpu\")\n"
+            "\n"
+            "print(\"Cấu hình runtime đã được thiết lập:\")\n"
+            "print(f\"  ENABLE_QWEN           : {ENABLE_QWEN}\")\n"
+            "print(f\"  QWEN_MIN_FREE_VRAM_GB : {QWEN_MIN_FREE_VRAM_GB} GB\")\n"
+            "print(f\"  USE_DRIVE_CACHE       : {USE_DRIVE_CACHE}\")\n"
+            "print(f\"  MAX_UPLOAD_MB         : {MAX_UPLOAD_MB} MB\")\n"
+            "print(f\"  DEFAULT_THRESHOLD     : {DEFAULT_THRESHOLD}\")\n"
+            "print(f\"  SAM_DEVICE            : {SAM_DEVICE}\")\n",
+            next_id("code_config"),
+        )
+    )
+
+    # 3. Optional Google Drive Mount (Uses USE_DRIVE_CACHE from 1b)
     cells.append(
         _make_markdown_cell(
             "## 2. Mount Google Drive tùy chọn để cache checkpoint Hugging Face\n"
             "\n"
-            "Đặt `USE_DRIVE_CACHE = True` nếu bạn muốn lưu checkpoint SAM 3 vào Google Drive để tránh tải lại mỗi lần restart runtime.",
+            "Sử dụng cờ `USE_DRIVE_CACHE` đã cấu hình ở Mục 1b. "
+            "Nếu bật, thư mục cache Hugging Face sẽ được đặt trên Google Drive để tránh tải lại checkpoint mỗi lần khởi động.",
             next_id("h_drive"),
         )
     )
     cells.append(
         _make_code_cell(
             "import os\n"
-            "\n"
-            "# Đặt True nếu muốn lưu checkpoint Hugging Face vào Google Drive\n"
-            "USE_DRIVE_CACHE = False\n"
             "\n"
             "if USE_DRIVE_CACHE:\n"
             "    from google.colab import drive\n"
@@ -141,19 +173,22 @@ def generate_notebook(repo_root: Optional[Path] = None) -> Dict[str, Any]:
         )
     )
 
-    # 4. Install Dependencies
+    # 4. Install Dependencies (Uses ENABLE_QWEN from 1b and checks torch.__version__)
     cells.append(
         _make_markdown_cell(
             "## 3. Cài đặt repository SAM 3 và server dependencies\n"
             "\n"
             "Cài package từ repository facebookresearch/sam3 chính thức và các thư viện FastAPI, Uvicorn, Multipart. "
-            "Dependencies của Qwen được cài đặt trong bước riêng có kiểm tra điều kiện để không nâng cấp PyTorch.",
+            "Dependencies của Qwen chỉ được cài nếu `ENABLE_QWEN = True`. Kiểm tra phiên bản PyTorch trước và sau khi cài đặt để đảm bảo không bị thay đổi.",
             next_id("h_install"),
         )
     )
     cells.append(
         _make_code_cell(
-            "import os, subprocess, sys\n"
+            "import importlib, os, subprocess, sys, torch\n"
+            "\n"
+            "orig_torch_version = torch.__version__\n"
+            "print(f\"Pre-install PyTorch version: {orig_torch_version}\")\n"
             "\n"
             "repo_dir = \"/content/sam3\"\n"
             "if not os.path.isdir(repo_dir):\n"
@@ -178,9 +213,8 @@ def generate_notebook(repo_root: Optional[Path] = None) -> Dict[str, Any]:
             ")\n"
             "\n"
             "# Cài đặt Qwen dependencies có kiểm tra điều kiện (không nâng cấp torch)\n"
-            "ENABLE_QWEN = True\n"
             "if ENABLE_QWEN:\n"
-            "    print(\"Installing Qwen dependencies (transformers>=4.57, accelerate, bitsandbytes)...\")\n"
+            "    print(f\"Installing Qwen dependencies (transformers>=4.57, accelerate, bitsandbytes) with PyTorch {orig_torch_version}...\")\n"
             "    subprocess.run(\n"
             "        [\n"
             "            sys.executable, \"-m\", \"pip\", \"install\",\n"
@@ -188,9 +222,20 @@ def generate_notebook(repo_root: Optional[Path] = None) -> Dict[str, Any]:
             "        ],\n"
             "        check=True,\n"
             "    )\n"
+            "else:\n"
+            "    print(\"ENABLE_QWEN is False: skipping Qwen dependencies installation.\")\n"
             "\n"
             "%cd /content\n"
-            "print(\"SAM 3 and server dependencies installed successfully.\")\n",
+            "\n"
+            "# Kiểm tra PyTorch version không bị thay đổi bởi pip\n"
+            "import torch as current_torch\n"
+            "importlib.reload(current_torch)\n"
+            "print(f\"Post-install PyTorch version: {current_torch.__version__}\")\n"
+            "if current_torch.__version__ != orig_torch_version:\n"
+            "    print(f\"\\nCRITICAL WARNING: PyTorch version changed from {orig_torch_version} to {current_torch.__version__}!\")\n"
+            "    print(\"This may break CUDA support. Please restart session via Runtime -> Restart session.\\n\")\n"
+            "else:\n"
+            "    print(\"PyTorch version verified unchanged. Compatible with Colab GPU runtime.\")\n",
             next_id("code_install"),
         )
     )
@@ -236,7 +281,8 @@ def generate_notebook(repo_root: Optional[Path] = None) -> Dict[str, Any]:
             "## 5. Tạo server source code trong runtime Colab\n"
             "\n"
             "Ghi toàn bộ module từ `server_reference/` vào `/content/server_reference/` "
-            "và thêm `/content` vào `sys.path` để có thể import trực tiếp.",
+            "và `colab/server_main.py` vào `/content/server_main.py`, "
+            "sau đó thêm `/content` vào `sys.path` để có thể import trực tiếp.",
             next_id("h_write_server"),
         )
     )
@@ -271,17 +317,18 @@ def generate_notebook(repo_root: Optional[Path] = None) -> Dict[str, Any]:
             "import sys\n"
             "if \"/content\" not in sys.path:\n"
             "    sys.path.insert(0, \"/content\")\n"
-            "print(\"server_reference modules loaded into sys.path.\")\n",
+            "print(\"server_reference and server_main loaded into sys.path.\")\n",
             next_id("code_syspath"),
         )
     )
 
-    # 7. Load SAM 3 Once
+    # 7. Load SAM 3 Once (Uses SAM_DEVICE and DEFAULT_THRESHOLD)
     cells.append(
         _make_markdown_cell(
             "## 6. Nạp SAM 3 Image Model và Processor (Chỉ nạp 1 lần)\n"
             "\n"
-            "Khởi tạo `Sam3Engine` và nạp model lên CUDA GPU. Thời gian nạp và dung lượng VRAM sử dụng sẽ được hiển thị.",
+            "Khởi tạo `Sam3Engine` với `SAM_DEVICE` và `DEFAULT_THRESHOLD` từ Mục 1b. "
+            "Thời gian nạp và dung lượng VRAM sử dụng sẽ được hiển thị.",
             next_id("h_load_sam3"),
         )
     )
@@ -296,11 +343,11 @@ def generate_notebook(repo_root: Optional[Path] = None) -> Dict[str, Any]:
             "\n"
             "print(\"Loading SAM 3 image model and processor...\")\n"
             "start_time = time.time()\n"
-            "sam_engine = Sam3Engine(device=\"cuda\", confidence_threshold=0.35)\n"
+            "sam_engine = Sam3Engine(device=SAM_DEVICE, confidence_threshold=DEFAULT_THRESHOLD)\n"
             "sam_engine.load()\n"
             "load_elapsed = time.time() - start_time\n"
             "\n"
-            "alloc_gb = torch.cuda.memory_allocated() / (1024 ** 3)\n"
+            "alloc_gb = torch.cuda.memory_allocated() / (1024 ** 3) if torch.cuda.is_available() else 0.0\n"
             "print(f\"SAM 3 loaded successfully in {load_elapsed:.2f} seconds.\")\n"
             "print(f\"GPU memory allocated: {alloc_gb:.2f} GB\")\n",
             next_id("code_load_sam3"),
@@ -355,49 +402,55 @@ def generate_notebook(repo_root: Optional[Path] = None) -> Dict[str, Any]:
         )
     )
 
-    # 9. Qwen Prompt Assistant Setup & Load
+    # 9. Qwen Prompt Assistant Setup & Load (Uses server_main.build_assistant and cleans cache)
     cells.append(
         _make_markdown_cell(
             "## 8. Cấu hình và nạp Qwen3-VL-4B Prompt Assistant (Tùy chọn, 4-bit NF4)\n"
             "\n"
-            "Đo bộ nhớ VRAM khả dụng trước và sau khi nạp. Nếu VRAM còn trống ít hơn ngưỡng an toàn (`QWEN_MIN_FREE_VRAM_GB = 5.0`) "
-            "hoặc gặp lỗi OOM, Prompt Assistant sẽ tự động bị vô hiệu hóa và SAM 3 manual mode vẫn hoạt động bình thường.",
+            "Dọn dẹp cache VRAM (`gc.collect(); torch.cuda.empty_cache()`) để tránh việc bộ nhớ cache của bước smoke test "
+            "làm sai lệch bước kiểm tra VRAM trống. Gọi `server_main.build_assistant(...)` để nạp model. "
+            "Nếu VRAM còn lại dưới `QWEN_MIN_FREE_VRAM_GB` hoặc nạp thất bại, Prompt Assistant sẽ tự vô hiệu hóa "
+            "và SAM 3 manual mode vẫn hoạt động bình thường.",
             next_id("h_qwen_load"),
         )
     )
     cells.append(
         _make_code_cell(
-            "import torch\n"
+            "import gc, torch\n"
+            "import server_main\n"
             "from server_reference.errors import PromptAssistantUnavailable\n"
-            "from server_reference.qwen_prompt_assistant import QwenPromptAssistant\n"
             "\n"
-            "ENABLE_QWEN = True\n"
-            "QWEN_MIN_FREE_VRAM_GB = 5.0\n"
-            "\n"
-            "assistant = QwenPromptAssistant(\n"
-            "    model_id=\"Qwen/Qwen3-VL-4B-Instruct\",\n"
-            "    enabled=ENABLE_QWEN,\n"
-            "    min_free_vram_gb=QWEN_MIN_FREE_VRAM_GB,\n"
-            "    max_image_side=768,\n"
-            "    max_new_tokens=160,\n"
-            "    device=\"cuda\",\n"
-            ")\n"
+            "# Dọn dẹp cache GPU trước khi đo VRAM và nạp Qwen\n"
+            "if torch.cuda.is_available():\n"
+            "    torch.cuda.empty_cache()\n"
+            "gc.collect()\n"
             "\n"
             "if torch.cuda.is_available():\n"
             "    free_bytes, total_bytes = torch.cuda.mem_get_info()\n"
             "    print(f\"VRAM before Qwen load: {free_bytes / 1024**3:.2f} GB free / {total_bytes / 1024**3:.2f} GB total\")\n"
             "\n"
             "if ENABLE_QWEN:\n"
-            "    print(\"Attempting to load Qwen3-VL-4B Prompt Assistant (4-bit NF4)...\")\n"
+            "    print(\"Attempting to load Qwen3-VL-4B Prompt Assistant via server_main.build_assistant...\")\n"
             "    try:\n"
-            "        assistant.load()\n"
-            "        print(\"Qwen Prompt Assistant loaded successfully!\")\n"
+            "        assistant = server_main.build_assistant(\n"
+            "            model_id=\"Qwen/Qwen3-VL-4B-Instruct\",\n"
+            "            enabled=ENABLE_QWEN,\n"
+            "            min_free_vram_gb=QWEN_MIN_FREE_VRAM_GB,\n"
+            "            device=\"cuda\",\n"
+            "        )\n"
+            "        if assistant.loaded:\n"
+            "            print(\"Qwen Prompt Assistant loaded successfully!\")\n"
+            "        else:\n"
+            "            print(f\"Prompt Assistant disabled — SAM 3 manual mode still works (Reason: {assistant.last_error or 'insufficient VRAM or disabled'})\")\n"
             "    except PromptAssistantUnavailable as e:\n"
             "        print(f\"Prompt Assistant disabled — SAM 3 manual mode still works (Reason: {e})\")\n"
+            "        assistant = server_main.build_assistant(enabled=False)\n"
             "    except Exception as e:\n"
             "        print(f\"Prompt Assistant disabled — SAM 3 manual mode still works (Unexpected error: {e})\")\n"
+            "        assistant = server_main.build_assistant(enabled=False)\n"
             "else:\n"
             "    print(\"Qwen Prompt Assistant disabled by user (ENABLE_QWEN = False).\")\n"
+            "    assistant = server_main.build_assistant(enabled=False)\n"
             "\n"
             "if torch.cuda.is_available():\n"
             "    free_bytes, total_bytes = torch.cuda.mem_get_info()\n"
@@ -423,7 +476,7 @@ def generate_notebook(repo_root: Optional[Path] = None) -> Dict[str, Any]:
             "\n"
             "if assistant.available and assistant.loaded:\n"
             "    print(\"Running Qwen smoke test with Vietnamese request...\")\n"
-            "    vietnamese_request = \"Lấy miếng patch thêu hình vuông ở giữa ảnh, bao gồm cả viền vải.\"\n"
+            "    vietnamese_request = \"Lấy miếng patch thêu hình vuông ở ngực áo, bao gồm cả viền vải.\"\n"
             "    try:\n"
             "        suggestion = assistant.suggest(\n"
             "            image=smoke_img,\n"
@@ -444,13 +497,13 @@ def generate_notebook(repo_root: Optional[Path] = None) -> Dict[str, Any]:
         )
     )
 
-    # 11. Server Config
+    # 11. Server Config (Uses MAX_UPLOAD_MB and DEFAULT_THRESHOLD from 1b)
     cells.append(
         _make_markdown_cell(
             "## 10. Cấu hình bảo mật và tham số Server\n"
             "\n"
-            "Tạo Bearer Token ngẫu nhiên (hoặc đọc từ Colab Secret `ARTWORK_API_TOKEN`) "
-            "và thiết lập giới hạn upload file (20MB) cùng confidence threshold mặc định (0.35).",
+            "Tạo Bearer Token ngẫu nhiên (hoặc đọc từ Colab Secret `ARTWORK_API_TOKEN`). "
+            "`MAX_UPLOAD_MB` và `DEFAULT_THRESHOLD` được lấy từ cấu hình chung ở Mục 1b.",
             next_id("h_server_cfg"),
         )
     )
@@ -468,9 +521,6 @@ def generate_notebook(repo_root: Optional[Path] = None) -> Dict[str, Any]:
             "if not API_TOKEN or len(API_TOKEN.strip()) < 16:\n"
             "    API_TOKEN = secrets.token_urlsafe(32)\n"
             "\n"
-            "MAX_UPLOAD_MB = 20\n"
-            "DEFAULT_THRESHOLD = 0.35\n"
-            "\n"
             "print(\"Server configuration ready:\")\n"
             "print(f\"  MAX_UPLOAD_MB    : {MAX_UPLOAD_MB}\")\n"
             "print(f\"  DEFAULT_THRESHOLD: {DEFAULT_THRESHOLD}\")\n"
@@ -479,19 +529,24 @@ def generate_notebook(repo_root: Optional[Path] = None) -> Dict[str, Any]:
         )
     )
 
-    # 12. Start Uvicorn in background thread
+    # 12. Start Uvicorn via server_main.start_uvicorn
     cells.append(
         _make_markdown_cell(
             "## 11. Khởi chạy FastAPI & Uvicorn (Daemon Background Thread)\n"
             "\n"
-            "Khởi chạy Uvicorn trên `127.0.0.1:8000` trong background thread và chờ endpoint `/health` phản hồi.",
+            "Khởi tạo FastAPI app và gọi `server_main.start_uvicorn(...)` để chạy uvicorn trong background thread. "
+            "Tự động dọn dẹp tiến trình server cũ nếu cell được chạy lại.",
             next_id("h_uvicorn"),
         )
     )
     cells.append(
         _make_code_cell(
-            "import threading, time, requests, uvicorn\n"
             "from server_reference.api import create_app\n"
+            "import server_main\n"
+            "\n"
+            "# Re-run safe: dừng server trước đó nếu có\n"
+            "if \"server\" in globals() and server:\n"
+            "    server_main.stop_server_and_tunnel(server=server)\n"
             "\n"
             "app = create_app(\n"
             "    sam_engine=sam_engine,\n"
@@ -501,105 +556,43 @@ def generate_notebook(repo_root: Optional[Path] = None) -> Dict[str, Any]:
             "    default_threshold=DEFAULT_THRESHOLD,\n"
             ")\n"
             "\n"
-            "server_config = uvicorn.Config(\n"
+            "print(\"Starting Uvicorn server in background thread via server_main.start_uvicorn...\")\n"
+            "server, server_thread = server_main.start_uvicorn(\n"
             "    app=app,\n"
             "    host=\"127.0.0.1\",\n"
             "    port=8000,\n"
-            "    log_level=\"info\",\n"
-            "    loop=\"asyncio\",\n"
+            "    timeout=30.0,\n"
             ")\n"
-            "server = uvicorn.Server(config=server_config)\n"
-            "\n"
-            "server_thread = threading.Thread(target=server.run, daemon=True, name=\"uvicorn-worker\")\n"
-            "server_thread.start()\n"
-            "\n"
-            "print(\"Waiting for local server on http://127.0.0.1:8000/health...\")\n"
-            "server_ready = False\n"
-            "start_wait = time.time()\n"
-            "while time.time() - start_wait < 30:\n"
-            "    try:\n"
-            "        resp = requests.get(\"http://127.0.0.1:8000/health\", timeout=1.0)\n"
-            "        if resp.status_code == 200:\n"
-            "            print(f\"Local server is healthy! Response: {resp.json()}\")\n"
-            "            server_ready = True\n"
-            "            break\n"
-            "    except Exception:\n"
-            "        pass\n"
-            "    time.sleep(0.5)\n"
-            "\n"
-            "if not server_ready:\n"
-            "    raise RuntimeError(\"Timed out waiting for uvicorn server to start on 127.0.0.1:8000\")\n",
+            "print(\"Local Uvicorn server is online on http://127.0.0.1:8000/health\")\n",
             next_id("code_uvicorn"),
         )
     )
 
-    # 13. Cloudflared Tunnel
+    # 13. Cloudflared Tunnel via server_main.start_cloudflared
     cells.append(
         _make_markdown_cell(
             "## 12. Cài đặt và khởi chạy Cloudflare Quick Tunnel\n"
             "\n"
-            "Tải binary `cloudflared-linux-amd64` chính thức từ GitHub releases, cấp quyền thực thi và mở tunnel kết nối tới `127.0.0.1:8000`. "
-            "Trích xuất public URL `https://*.trycloudflare.com` từ log file.",
+            "Gọi `server_main.start_cloudflared(...)` để tải binary (nếu chưa có), cấp quyền thực thi và mở tunnel. "
+            "Tự động dừng tunnel cũ nếu cell được chạy lại và trích xuất public URL `https://*.trycloudflare.com`.",
             next_id("h_cloudflared"),
         )
     )
     cells.append(
         _make_code_cell(
-            "import os, re, subprocess, time, urllib.request\n"
+            "import server_main\n"
             "\n"
-            "cloudflared_path = \"/content/cloudflared\"\n"
-            "log_path = \"/content/cloudflared.log\"\n"
+            "# Re-run safe: truyền tiến trình tunnel cũ để server_main dọn dẹp sạch sẽ\n"
+            "existing_tunnel = globals().get(\"tunnel_proc\")\n"
             "\n"
-            "if not os.path.exists(cloudflared_path):\n"
-            "    print(\"Downloading cloudflared binary (linux-amd64)...\")\n"
-            "    url = \"https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64\"\n"
-            "    urllib.request.urlretrieve(url, cloudflared_path)\n"
-            "    os.chmod(cloudflared_path, 0o755)\n"
-            "    print(\"cloudflared binary downloaded and set executable.\")\n"
-            "else:\n"
-            "    print(\"cloudflared binary already exists.\")\n"
-            "\n"
-            "if \"tunnel_proc\" in globals() and tunnel_proc and tunnel_proc.poll() is None:\n"
-            "    print(\"Stopping existing tunnel process...\")\n"
-            "    tunnel_proc.terminate()\n"
-            "    try:\n"
-            "        tunnel_proc.wait(timeout=5)\n"
-            "    except Exception:\n"
-            "        tunnel_proc.kill()\n"
-            "\n"
-            "print(\"Starting Cloudflare Quick Tunnel...\")\n"
-            "log_file = open(log_path, \"w\")\n"
-            "tunnel_proc = subprocess.Popen(\n"
-            "    [cloudflared_path, \"tunnel\", \"--url\", \"http://127.0.0.1:8000\", \"--no-autoupdate\"],\n"
-            "    stdout=log_file,\n"
-            "    stderr=subprocess.STDOUT,\n"
-            "    text=True,\n"
+            "print(\"Starting Cloudflare Quick Tunnel via server_main.start_cloudflared...\")\n"
+            "tunnel_proc, tunnel_url = server_main.start_cloudflared(\n"
+            "    port=8000,\n"
+            "    binary_path=\"/content/cloudflared\",\n"
+            "    log_path=\"/content/cloudflared.log\",\n"
+            "    timeout=60.0,\n"
+            "    existing_proc=existing_tunnel,\n"
             ")\n"
-            "\n"
-            "tunnel_url = None\n"
-            "tunnel_pattern = re.compile(r\"https://[a-zA-Z0-9-]+\\.trycloudflare\\.com\")\n"
-            "start_time = time.time()\n"
-            "timeout_seconds = 60\n"
-            "\n"
-            "print(f\"Waiting for Cloudflare tunnel URL (timeout {timeout_seconds}s)...\")\n"
-            "while time.time() - start_time < timeout_seconds:\n"
-            "    if os.path.exists(log_path):\n"
-            "        with open(log_path, \"r\", errors=\"ignore\") as f:\n"
-            "            content = f.read()\n"
-            "            match = tunnel_pattern.search(content)\n"
-            "            if match:\n"
-            "                tunnel_url = match.group(0)\n"
-            "                break\n"
-            "    if tunnel_proc.poll() is not None:\n"
-            "        raise RuntimeError(f\"cloudflared process exited prematurely with code {tunnel_proc.returncode}\")\n"
-            "    time.sleep(1.0)\n"
-            "\n"
-            "if not tunnel_url:\n"
-            "    with open(log_path, \"r\", errors=\"ignore\") as f:\n"
-            "        log_tail = f.read()[-500:]\n"
-            "    raise RuntimeError(\n"
-            "        f\"Failed to find Cloudflare tunnel URL within {timeout_seconds}s. Log tail:\\n{log_tail}\"\n"
-            "    )\n"
             "\n"
             "print(f\"Cloudflare Tunnel online: {tunnel_url}\")\n",
             next_id("code_cloudflared"),
@@ -689,31 +682,24 @@ def generate_notebook(repo_root: Optional[Path] = None) -> Dict[str, Any]:
         )
     )
 
-    # 16. Stop Server and Tunnel
+    # 16. Stop Server and Tunnel via server_main.stop_server_and_tunnel
     cells.append(
         _make_markdown_cell(
             "## 15. Dừng Server và Cloudflare Tunnel\n"
             "\n"
-            "Chạy cell này khi muốn dừng server Uvicorn và đóng Cloudflare Tunnel.",
+            "Gọi `server_main.stop_server_and_tunnel(...)` khi muốn dừng server Uvicorn và đóng Cloudflare Tunnel.",
             next_id("h_stop_server"),
         )
     )
     cells.append(
         _make_code_cell(
-            "print(\"Shutting down server and tunnel...\")\n"
+            "import server_main\n"
             "\n"
-            "if \"tunnel_proc\" in globals() and tunnel_proc:\n"
-            "    tunnel_proc.terminate()\n"
-            "    try:\n"
-            "        tunnel_proc.wait(timeout=5)\n"
-            "    except Exception:\n"
-            "        tunnel_proc.kill()\n"
-            "    print(\"Cloudflare tunnel stopped.\")\n"
-            "\n"
-            "if \"server\" in globals() and server:\n"
-            "    server.should_exit = True\n"
-            "    print(\"Uvicorn server signaled to exit.\")\n"
-            "\n"
+            "print(\"Shutting down server and tunnel via server_main.stop_server_and_tunnel...\")\n"
+            "server_main.stop_server_and_tunnel(\n"
+            "    server=globals().get(\"server\"),\n"
+            "    tunnel_proc=globals().get(\"tunnel_proc\"),\n"
+            ")\n"
             "print(\"Shutdown complete.\")\n",
             next_id("code_stop_server"),
         )
@@ -728,11 +714,11 @@ def generate_notebook(repo_root: Optional[Path] = None) -> Dict[str, Any]:
             "  Cloudflare Quick Tunnel tự động cấp một URL `https://*.trycloudflare.com` ngẫu nhiên mỗi khi tiến trình chạy lại. "
             "  Khi restart tunnel, bạn cần copy URL mới vào `local_app/.env` hoặc cập nhật trực tiếp tại thanh sidebar của local Streamlit UI.\n"
             "\n"
-            "- **CUDA Out-of-Memory (OOM)**:\n"
+            "- **CUDA Out-of-Memory (OOM) hoặc muốn tắt Qwen**:\n"
             "  GPU T4 có 16GB VRAM. Nếu việc nạp Qwen3-VL-4B cùng SAM 3 gây quá tải bộ nhớ:\n"
             "  1. Vào menu **Runtime → Restart session**.\n"
-            "  2. Ở Mục 8 (Cell cấu hình Qwen), đặt `ENABLE_QWEN = False`.\n"
-            "  3. Chạy lại từ Mục 6. SAM 3 manual mode sẽ hoạt động ổn định trên GPU mà không cần Qwen.\n"
+            "  2. Ở **Mục 1b (Cell cấu hình chung)** ở đầu notebook, đặt `ENABLE_QWEN = False`.\n"
+            "  3. Chạy lần lượt các cell từ trên xuống dưới. Các thư viện nặng của Qwen (bitsandbytes, accelerate) sẽ không bị tải/cài và SAM 3 sẽ chạy độc lập thoải mái trong VRAM.\n"
             "\n"
             "- **Colab Runtime bị ngắt kết nối (Disconnect / Timeout)**:\n"
             "  Google Colab có thể ngắt kết nối khi session không có tương tác trong một thời gian dài.\n"

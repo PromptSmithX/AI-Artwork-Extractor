@@ -5,18 +5,15 @@ and Cloudflare Quick Tunnel exposure.
 """
 from __future__ import annotations
 
+import gc
 import logging
 import os
 import re
-import secrets
 import subprocess
 import threading
 import time
 import urllib.request
 from typing import Any, Optional, Tuple
-
-from server_reference.api import create_app
-from server_reference.schemas import Mode, ScopePreference
 
 logger = logging.getLogger("colab.server_main")
 
@@ -44,9 +41,17 @@ def build_assistant(
 ) -> Any:
     """Build and optionally load QwenPromptAssistant in 4-bit mode.
 
-    If loading fails with PromptAssistantUnavailable, falls back cleanly
-    so SAM 3 manual mode continues to function.
+    Cleans GPU cache before measuring VRAM and loading, so previous SAM inference
+    does not cause spurious VRAM check failures.
     """
+    try:
+        import torch
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+    except Exception:
+        pass
+    gc.collect()
+
     from server_reference.errors import PromptAssistantUnavailable
     from server_reference.qwen_prompt_assistant import QwenPromptAssistant
 
@@ -116,51 +121,87 @@ def start_cloudflared(
     binary_path: str = "/content/cloudflared",
     log_path: str = "/content/cloudflared.log",
     timeout: float = 60.0,
+    existing_proc: Optional[subprocess.Popen] = None,
 ) -> Tuple[subprocess.Popen, str]:
-    """Download (if needed) and run cloudflared Quick Tunnel, returning process and URL."""
+    """Download (if needed) and run cloudflared Quick Tunnel, returning process and URL.
+
+    Re-run safe: cleanly terminates any existing_proc and its log handle.
+    Keeps a reference to the opened log file on success (attached to proc.log_file)
+    and closes the log file on failure to avoid leaking file descriptors.
+    """
+    if existing_proc is not None:
+        stop_server_and_tunnel(tunnel_proc=existing_proc)
+
     if not os.path.exists(binary_path):
         url = "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64"
         logger.info("Downloading cloudflared from %s to %s", url, binary_path)
-        urllib.request.urlretrieve(url, binary_path)
-        os.chmod(binary_path, 0o755)
+        try:
+            urllib.request.urlretrieve(url, binary_path)
+        except Exception as err:
+            raise RuntimeError(f"Failed to download cloudflared binary from {url}: {err}") from err
+        try:
+            os.chmod(binary_path, 0o755)
+        except Exception as err:
+            raise RuntimeError(f"Failed to set executable permissions on {binary_path}: {err}") from err
 
-    log_file = open(log_path, "w")
-    proc = subprocess.Popen(
-        [binary_path, "tunnel", "--url", f"http://127.0.0.1:{port}", "--no-autoupdate"],
-        stdout=log_file,
-        stderr=subprocess.STDOUT,
-        text=True,
-    )
+    log_file = open(log_path, "w", encoding="utf-8")
+    proc: Optional[subprocess.Popen] = None
+    try:
+        proc = subprocess.Popen(
+            [binary_path, "tunnel", "--url", f"http://127.0.0.1:{port}", "--no-autoupdate"],
+            stdout=log_file,
+            stderr=subprocess.STDOUT,
+            text=True,
+        )
 
-    start_time = time.time()
-    tunnel_url = None
+        start_time = time.time()
+        tunnel_url = None
 
-    while time.time() - start_time < timeout:
-        if os.path.exists(log_path):
-            with open(log_path, "r", errors="ignore") as f:
-                content = f.read()
-                tunnel_url = parse_tunnel_url_from_text(content)
-                if tunnel_url:
-                    break
-        if proc.poll() is not None:
-            raise RuntimeError(f"cloudflared exited unexpectedly with code {proc.returncode}")
-        time.sleep(1.0)
+        while time.time() - start_time < timeout:
+            if os.path.exists(log_path):
+                with open(log_path, "r", errors="ignore", encoding="utf-8") as f:
+                    content = f.read()
+                    tunnel_url = parse_tunnel_url_from_text(content)
+                    if tunnel_url:
+                        break
+            if proc.poll() is not None:
+                raise RuntimeError(f"cloudflared exited unexpectedly with code {proc.returncode}")
+            time.sleep(1.0)
 
-    if not tunnel_url:
-        tail = ""
-        if os.path.exists(log_path):
-            with open(log_path, "r", errors="ignore") as f:
-                tail = f.read()[-500:]
-        raise RuntimeError(f"Failed to find Cloudflare tunnel URL within {timeout}s:\n{tail}")
+        if not tunnel_url:
+            tail = ""
+            if os.path.exists(log_path):
+                with open(log_path, "r", errors="ignore", encoding="utf-8") as f:
+                    tail = f.read()[-500:]
+            raise RuntimeError(f"Failed to find Cloudflare tunnel URL within {timeout}s:\n{tail}")
 
-    return proc, tunnel_url
+        # Attach log file handle to process so it can be closed upon shutdown
+        setattr(proc, "log_file", log_file)
+        return proc, tunnel_url
+
+    except Exception:
+        if proc is not None:
+            try:
+                proc.terminate()
+                proc.wait(timeout=2)
+            except Exception:
+                try:
+                    proc.kill()
+                except Exception:
+                    pass
+        if not log_file.closed:
+            try:
+                log_file.close()
+            except Exception:
+                pass
+        raise
 
 
 def stop_server_and_tunnel(
     server: Optional[Any] = None,
     tunnel_proc: Optional[subprocess.Popen] = None,
 ) -> None:
-    """Terminate the cloudflared process and signal uvicorn server to exit."""
+    """Terminate the cloudflared process, close its log file, and signal uvicorn server to exit."""
     if tunnel_proc is not None:
         try:
             tunnel_proc.terminate()
@@ -170,6 +211,13 @@ def stop_server_and_tunnel(
                 tunnel_proc.kill()
             except Exception:
                 pass
+        finally:
+            log_file = getattr(tunnel_proc, "log_file", None)
+            if log_file and not log_file.closed:
+                try:
+                    log_file.close()
+                except Exception:
+                    pass
 
     if server is not None:
         server.should_exit = True
