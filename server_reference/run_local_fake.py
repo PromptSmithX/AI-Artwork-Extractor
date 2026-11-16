@@ -31,7 +31,7 @@ def main() -> None:
         token = secrets.token_urlsafe(32)
         print(f"\n[LOCAL DEV ONLY] Generated bearer token: {token}\n", flush=True)
     else:
-        print(f"\n[LOCAL DEV ONLY] Using specified bearer token: {token}\n", flush=True)
+        print("\n[LOCAL DEV ONLY] Using token from --token/API_TOKEN\n", flush=True)
 
     fake_sam = FakeSam3Engine(device="cpu")
     fake_assistant = FakePromptAssistant(available=True, loaded=True)

@@ -21,7 +21,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from PIL import Image, ImageOps
 
-from server_reference.fake_engines import PromptAssistantOutputError, PromptAssistantUnavailable
+from server_reference.errors import PromptAssistantOutputError, PromptAssistantUnavailable
 from server_reference.image_export import build_result_zip
 from server_reference.sam3_engine import gpu_name
 from server_reference.schemas import HealthResponse, Mode, PromptSuggestion, ScopePreference
@@ -69,6 +69,10 @@ def create_app(
     default_threshold: float = 0.35,
 ) -> FastAPI:
     """Create and configure the FastAPI application."""
+    if not api_token or not api_token.strip() or len(api_token.strip()) < 16:
+        raise ValueError("api_token must be a non-empty string of at least 16 characters")
+    api_token = api_token.strip()
+
     app = FastAPI(title="AI Artwork Extractor Colab Server")
     lock = threading.Lock()
     app.state.lock = lock
@@ -82,14 +86,21 @@ def create_app(
         return JSONResponse(status_code=422, content={"detail": detail})
 
     def verify_auth(authorization: Optional[str] = Header(None)) -> None:
-        """Enforce Bearer token authorization header."""
-        if not authorization or not authorization.startswith("Bearer "):
+        """Enforce Bearer token authorization header case-insensitively per RFC 6750."""
+        if not authorization:
             raise HTTPException(
                 status_code=401,
                 detail="Missing or invalid Bearer authorization header",
                 headers={"WWW-Authenticate": "Bearer"},
             )
-        token = authorization[len("Bearer ") :].strip()
+        parts = authorization.split(maxsplit=1)
+        if len(parts) != 2 or parts[0].lower() != "bearer":
+            raise HTTPException(
+                status_code=401,
+                detail="Missing or invalid Bearer authorization header",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+        token = parts[1].strip()
         if not secrets.compare_digest(token, api_token):
             raise HTTPException(
                 status_code=401,
@@ -275,6 +286,8 @@ def create_app(
                 media_type="application/zip",
                 headers={"Content-Disposition": 'attachment; filename="result.zip"'},
             )
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc))
         except HTTPException:
             raise
         except Exception:

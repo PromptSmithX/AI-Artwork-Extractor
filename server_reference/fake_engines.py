@@ -9,24 +9,15 @@ from typing import TYPE_CHECKING, Any, List, Optional
 
 import numpy as np
 
+from server_reference.errors import (
+    PromptAssistantOutputError,
+    PromptAssistantUnavailable,
+)
 from server_reference.sam3_engine import SegResult
 from server_reference.schemas import Mode, PromptSuggestion, Scope, ScopePreference
 
 if TYPE_CHECKING:
     import PIL.Image
-
-# Import or define exceptions matching contract §3
-try:
-    from server_reference.qwen_prompt_assistant import (  # type: ignore
-        PromptAssistantOutputError,
-        PromptAssistantUnavailable,
-    )
-except ImportError:
-    class PromptAssistantUnavailable(RuntimeError):
-        """Raised when the prompt assistant model cannot be loaded or used."""
-
-    class PromptAssistantOutputError(RuntimeError):
-        """Raised when the prompt assistant model produces unparseable output."""
 
 
 class FakeSam3Engine:

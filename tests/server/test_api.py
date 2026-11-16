@@ -463,3 +463,61 @@ def test_sam3_engine_not_loaded_503(fake_assistant: FakePromptAssistant):
         files={"image": ("cap.png", img_bytes, "image/png")},
     )
     assert resp.status_code == 503
+
+
+def test_create_app_requires_strong_token(fake_sam: FakeSam3Engine, fake_assistant: FakePromptAssistant):
+    """create_app requires a non-empty token of at least 16 characters."""
+    bad_tokens = ["", "   ", "short", "123456789012345"]
+    for t in bad_tokens:
+        with pytest.raises(ValueError, match="api_token must be a non-empty string of at least 16 characters"):
+            create_app(sam_engine=fake_sam, assistant=fake_assistant, api_token=t)
+
+    # 16 chars or longer succeeds
+    app = create_app(sam_engine=fake_sam, assistant=fake_assistant, api_token="1234567890123456")
+    assert app is not None
+
+
+def test_auth_case_insensitive_bearer(client: TestClient):
+    """Authorization header accepts 'bearer' case-insensitively per RFC 6750."""
+    img_bytes = _make_image_bytes("PNG")
+
+    # Lowercase 'bearer'
+    resp_lower = client.post(
+        "/api/v1/segment",
+        headers={"Authorization": f"bearer {TEST_TOKEN}"},
+        data={"mode": "text", "prompt": "patch"},
+        files={"image": ("cap.png", img_bytes, "image/png")},
+    )
+    assert resp_lower.status_code == 200
+
+    # Uppercase 'BEARER'
+    resp_upper = client.post(
+        "/api/v1/segment",
+        headers={"Authorization": f"BEARER {TEST_TOKEN}"},
+        data={"mode": "text", "prompt": "patch"},
+        files={"image": ("cap.png", img_bytes, "image/png")},
+    )
+    assert resp_upper.status_code == 200
+
+
+def test_segment_value_error_mapped_to_422(fake_assistant: FakePromptAssistant):
+    """When sam_engine.segment raises ValueError, api returns 422 with the error detail."""
+    class ErrorEngine(FakeSam3Engine):
+        def segment(self, *args, **kwargs):
+            raise ValueError("Invalid prompt combination for segmentation")
+
+    error_sam = ErrorEngine()
+    app = create_app(sam_engine=error_sam, assistant=fake_assistant, api_token=TEST_TOKEN)
+    client = TestClient(app)
+
+    headers = {"Authorization": f"Bearer {TEST_TOKEN}"}
+    img_bytes = _make_image_bytes("PNG")
+
+    resp = client.post(
+        "/api/v1/segment",
+        headers=headers,
+        data={"mode": "text", "prompt": "patch"},
+        files={"image": ("cap.png", img_bytes, "image/png")},
+    )
+    assert resp.status_code == 422
+    assert "Invalid prompt combination for segmentation" in resp.json()["detail"]
