@@ -1,1 +1,10 @@
 /test sam 3/*
+.env
+local_app/.env
+outputs/
+__pycache__/
+*.pyc
+.pytest_cache/
+*.zip
+.venv/
+.ipynb_checkpoints/
