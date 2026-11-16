@@ -173,19 +173,19 @@ def generate_notebook(repo_root: Optional[Path] = None) -> Dict[str, Any]:
         )
     )
 
-    # 4. Install Dependencies (Uses ENABLE_QWEN from 1b and checks torch.__version__)
+    # 4. Install Dependencies (Uses ENABLE_QWEN from 1b and checks torch.__version__ via subprocess)
     cells.append(
         _make_markdown_cell(
             "## 3. Cài đặt repository SAM 3 và server dependencies\n"
             "\n"
             "Cài package từ repository facebookresearch/sam3 chính thức và các thư viện FastAPI, Uvicorn, Multipart. "
-            "Dependencies của Qwen chỉ được cài nếu `ENABLE_QWEN = True`. Kiểm tra phiên bản PyTorch trước và sau khi cài đặt để đảm bảo không bị thay đổi.",
+            "Dependencies của Qwen chỉ được cài nếu `ENABLE_QWEN = True`. Kiểm tra phiên bản PyTorch trước và sau khi cài đặt thông qua tiến trình con độc lập để đảm bảo không bị thay đổi.",
             next_id("h_install"),
         )
     )
     cells.append(
         _make_code_cell(
-            "import importlib, os, subprocess, sys, torch\n"
+            "import os, subprocess, sys, torch\n"
             "\n"
             "orig_torch_version = torch.__version__\n"
             "print(f\"Pre-install PyTorch version: {orig_torch_version}\")\n"
@@ -227,15 +227,19 @@ def generate_notebook(repo_root: Optional[Path] = None) -> Dict[str, Any]:
             "\n"
             "%cd /content\n"
             "\n"
-            "# Kiểm tra PyTorch version không bị thay đổi bởi pip\n"
-            "import torch as current_torch\n"
-            "importlib.reload(current_torch)\n"
-            "print(f\"Post-install PyTorch version: {current_torch.__version__}\")\n"
-            "if current_torch.__version__ != orig_torch_version:\n"
-            "    print(f\"\\nCRITICAL WARNING: PyTorch version changed from {orig_torch_version} to {current_torch.__version__}!\")\n"
+            "# Kiểm tra PyTorch version không bị thay đổi bởi pip thông qua tiến trình con độc lập\n"
+            "check_proc = subprocess.run(\n"
+            "    [sys.executable, \"-c\", \"import torch; print(torch.__version__)\"],\n"
+            "    capture_output=True,\n"
+            "    text=True,\n"
+            ")\n"
+            "post_torch_version = check_proc.stdout.strip()\n"
+            "print(f\"Post-install PyTorch version: {post_torch_version}\")\n"
+            "if post_torch_version != orig_torch_version:\n"
+            "    print(f\"\\nCRITICAL WARNING: PyTorch version changed on disk from {orig_torch_version} to {post_torch_version}!\")\n"
             "    print(\"This may break CUDA support. Please restart session via Runtime -> Restart session.\\n\")\n"
             "else:\n"
-            "    print(\"PyTorch version verified unchanged. Compatible with Colab GPU runtime.\")\n",
+            "    print(\"PyTorch version verified unchanged on disk. Compatible with Colab GPU runtime.\")\n",
             next_id("code_install"),
         )
     )
@@ -529,13 +533,13 @@ def generate_notebook(repo_root: Optional[Path] = None) -> Dict[str, Any]:
         )
     )
 
-    # 12. Start Uvicorn via server_main.start_uvicorn
+    # 12. Start Uvicorn via server_main.start_uvicorn with re-run safety
     cells.append(
         _make_markdown_cell(
             "## 11. Khởi chạy FastAPI & Uvicorn (Daemon Background Thread)\n"
             "\n"
             "Khởi tạo FastAPI app và gọi `server_main.start_uvicorn(...)` để chạy uvicorn trong background thread. "
-            "Tự động dọn dẹp tiến trình server cũ nếu cell được chạy lại.",
+            "Tự động dừng server cũ và đợi giải phóng port 8000 nếu cell được chạy lại.",
             next_id("h_uvicorn"),
         )
     )
@@ -544,9 +548,12 @@ def generate_notebook(repo_root: Optional[Path] = None) -> Dict[str, Any]:
             "from server_reference.api import create_app\n"
             "import server_main\n"
             "\n"
-            "# Re-run safe: dừng server trước đó nếu có\n"
+            "# Re-run safe: dừng server trước đó nếu có và chờ thread kết thúc để giải phóng port 8000\n"
             "if \"server\" in globals() and server:\n"
-            "    server_main.stop_server_and_tunnel(server=server)\n"
+            "    server_main.stop_server_and_tunnel(\n"
+            "        server=server,\n"
+            "        thread=globals().get(\"server_thread\"),\n"
+            "    )\n"
             "\n"
             "app = create_app(\n"
             "    sam_engine=sam_engine,\n"
@@ -682,7 +689,7 @@ def generate_notebook(repo_root: Optional[Path] = None) -> Dict[str, Any]:
         )
     )
 
-    # 16. Stop Server and Tunnel via server_main.stop_server_and_tunnel
+    # 16. Stop Server and Tunnel via server_main.stop_server_and_tunnel with thread waiting
     cells.append(
         _make_markdown_cell(
             "## 15. Dừng Server và Cloudflare Tunnel\n"
@@ -699,6 +706,7 @@ def generate_notebook(repo_root: Optional[Path] = None) -> Dict[str, Any]:
             "server_main.stop_server_and_tunnel(\n"
             "    server=globals().get(\"server\"),\n"
             "    tunnel_proc=globals().get(\"tunnel_proc\"),\n"
+            "    thread=globals().get(\"server_thread\"),\n"
             ")\n"
             "print(\"Shutdown complete.\")\n",
             next_id("code_stop_server"),

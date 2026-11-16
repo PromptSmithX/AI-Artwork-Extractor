@@ -1,6 +1,6 @@
 """Tests for Colab notebook generation and embedded server reference code.
 
-Per Task W4 and Review Round 1 requirements:
+Per Task W4 and Review Rounds 1 & 2 requirements:
 - Generated notebook is valid JSON with nbformat 4
 - Contains a %%writefile cell for every server_reference/*.py
 - Embedded content equals the source file content
@@ -9,8 +9,9 @@ Per Task W4 and Review Round 1 requirements:
 - Notebook is up to date (re-generate in memory and compare to committed file)
 - Single config cell right after GPU check with no reassignments in later cells
 - Notebook delegates uvicorn, cloudflared, assistant, and stop logic to server_main
-- Torch version check around install step
+- Torch version check around install step using subprocess (no importlib.reload)
 - VRAM cache cleanup before Qwen loading
+- Re-run safe uvicorn thread join when stopping/restarting
 """
 from __future__ import annotations
 
@@ -183,8 +184,6 @@ def test_single_config_cell_and_no_reassignments(notebook_data: Dict[str, Any]) 
     """Verify ONE config cell exists and configuration variables are never reassigned in later cells."""
     code_cells = [c for c in notebook_data["cells"] if c.get("cell_type") == "code"]
 
-    # Cell 1 is GPU check, Cell 2 is Config cell
-    gpu_cell_idx = 0
     config_cell_idx = 1
     config_text = "".join(code_cells[config_cell_idx].get("source", []))
 
@@ -236,12 +235,13 @@ def test_server_main_helpers_delegation(notebook_data: Dict[str, Any]) -> None:
     assert "server_main.start_uvicorn(" in all_user_code
     # 3. start_cloudflared helper called in cloudflared cell
     assert "server_main.start_cloudflared(" in all_user_code
-    # 4. stop_server_and_tunnel helper called in shutdown cell
+    # 4. stop_server_and_tunnel helper called in shutdown cell and restart cell
     assert "server_main.stop_server_and_tunnel(" in all_user_code
+    assert "thread=globals().get(\"server_thread\")" in all_user_code
 
 
 def test_torch_version_check_around_install(notebook_data: Dict[str, Any]) -> None:
-    """Verify install cell checks PyTorch version before and after installation."""
+    """Verify install cell checks PyTorch version before and after installation via subprocess."""
     install_cell = None
     for cell in notebook_data["cells"]:
         text = "".join(cell.get("source", []))
@@ -252,7 +252,14 @@ def test_torch_version_check_around_install(notebook_data: Dict[str, Any]) -> No
     assert install_cell is not None, "Install cell not found"
     assert "orig_torch_version = torch.__version__" in install_cell
     assert "orig_torch_version" in install_cell
-    assert "current_torch.__version__ != orig_torch_version" in install_cell
+    assert "post_torch_version != orig_torch_version" in install_cell
+    assert "import torch; print(torch.__version__)" in install_cell
+
+
+def test_no_importlib_reload_in_notebook(notebook_data: Dict[str, Any]) -> None:
+    """Verify notebook contains no importlib.reload( calls."""
+    all_text = " ".join("".join(c.get("source", [])) for c in notebook_data["cells"])
+    assert "importlib.reload(" not in all_text
 
 
 def test_cache_cleanup_before_qwen_load(notebook_data: Dict[str, Any]) -> None:

@@ -58,6 +58,20 @@ def test_stop_server_and_tunnel_terminates_proc_and_signals_server() -> None:
     assert mock_server.should_exit is True
 
 
+def test_stop_server_and_tunnel_joins_thread() -> None:
+    """Verify uvicorn thread is joined when passed to stop_server_and_tunnel."""
+    mock_server = MagicMock()
+    mock_server.should_exit = False
+    mock_thread = MagicMock(spec=threading.Thread)
+    mock_thread.is_alive.return_value = True
+
+    stop_server_and_tunnel(server=mock_server, thread=mock_thread, timeout=10.0)
+
+    assert mock_server.should_exit is True
+    mock_thread.is_alive.assert_called_once()
+    mock_thread.join.assert_called_once_with(timeout=10.0)
+
+
 def test_stop_server_and_tunnel_kills_on_timeout() -> None:
     """If process does not terminate within timeout, kill should be called."""
     mock_proc = MagicMock(spec=subprocess.Popen)

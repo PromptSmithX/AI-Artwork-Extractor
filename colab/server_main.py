@@ -200,8 +200,12 @@ def start_cloudflared(
 def stop_server_and_tunnel(
     server: Optional[Any] = None,
     tunnel_proc: Optional[subprocess.Popen] = None,
+    thread: Optional[threading.Thread] = None,
+    timeout: float = 10.0,
 ) -> None:
-    """Terminate the cloudflared process, close its log file, and signal uvicorn server to exit."""
+    """Terminate the cloudflared process, close its log file, signal uvicorn server to exit,
+    and wait for the uvicorn background thread to join so port 8000 is freed for restart.
+    """
     if tunnel_proc is not None:
         try:
             tunnel_proc.terminate()
@@ -221,3 +225,10 @@ def stop_server_and_tunnel(
 
     if server is not None:
         server.should_exit = True
+
+    if thread is not None and thread.is_alive():
+        thread.join(timeout=timeout)
+
+    # Brief pause to ensure OS releases bound sockets
+    if server is not None or thread is not None:
+        time.sleep(0.5)
