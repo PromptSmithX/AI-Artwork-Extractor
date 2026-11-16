@@ -67,7 +67,7 @@
 ### 1.3. Phạm vi tính năng MVP
 
 #### Có trong MVP:
-- Hỗ trợ tải lên ảnh sản phẩm các định dạng: JPG, JPEG, PNG, WebP.
+- Hỗ trợ tải lên ảnh sản phẩm định dạng JPG, JPEG, PNG trên giao diện Streamlit (phía backend FastAPI hỗ trợ thêm WebP khi gọi trực tiếp qua API).
 - Nhập prompt văn bản thủ công bằng tiếng Anh để SAM 3 tìm kiếm artwork.
 - Vẽ hộp giới hạn (Bounding Box) trực tiếp trên khung vẽ ảnh để định vị khu vực cần tách.
 - Hỗ trợ 3 chế độ trích xuất linh hoạt:
@@ -165,7 +165,9 @@ Mở biểu tượng chiếc chìa khóa (**Secrets**) ở thanh công cụ bên
 2. Quá trình chạy sẽ tuần tự: cài đặt thư viện cần thiết, tải checkpoint SAM 3, nạp Qwen (nếu bật), khởi chạy FastAPI server trên cổng nội bộ `8000`, và mở Cloudflare Quick Tunnel.
 
 ### Bước 5: Lấy thông tin kết nối
-Tại cell cuối cùng của notebook, Colab sẽ hiển thị thông tin dạng:
+Tại cell khởi chạy server, Colab sẽ in URL công khai từ Cloudflare Quick Tunnel cùng API Bearer Token để kết nối. Đồng thời, notebook cũng in sẵn các dòng cấu hình để bạn có thể sao chép nhanh vào file `.env`.
+
+*(Ví dụ minh họa, nội dung hiển thị thực tế trong notebook có thể có khác biệt nhỏ)*:
 ```text
 ======================================================================
 🚀 AI ARTWORK EXTRACTOR SERVER IS READY!
@@ -174,6 +176,10 @@ Public API URL : https://random-subdomain.trycloudflare.com
 API Bearer Token: your-generated-secret-token-here
 Health Check   : https://random-subdomain.trycloudflare.com/health
 ======================================================================
+
+Paste this into your local_app/.env:
+COLAB_API_URL=https://random-subdomain.trycloudflare.com
+COLAB_API_TOKEN=your-generated-secret-token-here
 ```
 Hãy sao chép **Public API URL** và **API Bearer Token** để cấu hình cho Local App trên máy tính của bạn.
 
@@ -237,7 +243,7 @@ Trình duyệt web sẽ tự động mở trang ứng dụng tại địa chỉ 
 
 > [!TIP]
 > **Cập nhật URL nhanh khi Colab thay đổi:**  
-> Mỗi khi phiên làm việc trên Colab khởi động lại, Cloudflare Quick Tunnel sẽ cấp một URL ngẫu nhiên mới. Designer có thể dán trực tiếp URL mới vào ô **API URL** ngay trên thanh **Sidebar** của ứng dụng Streamlit và nhấn **Update** mà không cần sửa file `.env` hay khởi động lại terminal.
+> Mỗi khi phiên làm việc trên Colab khởi động lại, Cloudflare Quick Tunnel sẽ cấp một URL ngẫu nhiên mới. Designer có thể dán trực tiếp URL mới vào ô **Colab API URL** (kèm **API Bearer Token** nếu có thay đổi) ngay trên thanh **Sidebar** của ứng dụng Streamlit và nhấn nút **Check connection** mà không cần sửa file `.env` hay khởi động lại terminal.
 
 ---
 
@@ -274,7 +280,10 @@ Chỉ cần cấu hình trong `local_app/.env` hoặc nhập trực tiếp trên
 ```bash
 python -m pytest
 ```
-Toàn bộ 55+ bài kiểm tra sẽ được thực thi và xác thực trong môi trường CPU cục bộ.
+Toàn bộ các bài kiểm tra tự động sẽ được thực thi và xác thực trong môi trường CPU cục bộ.
+
+> [!NOTE]
+> **Xác thực tích hợp cục bộ:** Luồng thao tác hoàn chỉnh kết hợp Fake Server và Streamlit UI đã được xác thực cục bộ (kết nối, Ask Qwen tự điền prompt, nút chọn alternative prompts, Run SAM 3, chọn candidate, chuyển các tab xem trước Mask/Overlay/Cutout, và tải file PNG/ZIP).
 
 ---
 
@@ -400,7 +409,7 @@ Tuân thủ nghiêm ngặt theo các nguyên tắc an ninh của dự án (Kế 
 2. **Không commit bí mật lên Git:** Tuyệt đối không commit file `.env`, Hugging Face token, hay API Bearer token vào repository. Kho mã nguồn đã cấu hình sẵn quy tắc chặn trong `.gitignore`.
 3. **Bản chất của Cloudflare Quick Tunnel:** Quick Tunnel là đường hầm công khai tạm thời phục vụ giai đoạn thử nghiệm (không yêu cầu domain riêng). Bất kỳ ai có đường link URL đều có thể truy cập tới cổng dịch vụ; do đó Bearer token là chốt chặn bảo vệ duy nhất và bắt buộc.
 4. **Bảo mật dữ liệu khách hàng:** Không tải lên ảnh thiết kế độc quyền chưa công bố, hình ảnh nhạy cảm hoặc tư liệu khách hàng bí mật lên môi trường thử nghiệm khi chưa có sự phê duyệt chính thức từ ban quản lý.
-5. **Giới hạn tải lên & Dọn dẹp bộ nhớ:** Server giới hạn dung lượng upload tối đa (mặc định 20MB) và chỉ chấp nhận định dạng ảnh hợp lệ. File tạm trên RAM/Disk được tự động dọn dẹp sau khi gửi trả kết quả.
+5. **Giới hạn tải lên & Xử lý In-Memory:** Server giới hạn dung lượng upload tối đa (mặc định 20MB) và chỉ chấp nhận định dạng ảnh hợp lệ. Toàn bộ quá trình tạo ảnh cutout, overlay và đóng gói file ZIP kết quả đều được thực hiện hoàn toàn trong bộ nhớ RAM (`io.BytesIO`), không ghi file tạm ra ổ đĩa, giúp bảo vệ dữ liệu và giải phóng bộ nhớ ngay sau khi request hoàn tất.
 
 ---
 
@@ -408,11 +417,12 @@ Tuân thủ nghiêm ngặt theo các nguyên tắc an ninh của dự án (Kế 
 
 | Tình huống / Mã lỗi | Nguyên nhân khả dĩ | Hướng dẫn khắc phục |
 |---|---|---|
-| **Mất kết nối / Expired Tunnel**<br>(*UI báo "Disconnected"*) | - Phiên làm việc Google Colab bị ngắt do hết hạn hoặc mất kết nối mạng.<br>- Tiến trình `cloudflared` Quick Tunnel bị dừng. | 1. Kiểm tra lại tab Google Colab.<br>2. Nếu runtime bị ngắt, chạy lại notebook.<br>3. Sao chép URL mới và dán vào ô **API URL** ở thanh Sidebar của UI rồi bấm **Update**. |
-| **Lỗi 401 Unauthorized** | - Token trong file `.env` hoặc thanh Sidebar chưa được cấu hình.<br>- Token không khớp chính xác với Bearer Token trên Colab. | Kiểm tra lại thông báo ở cell cuối cùng của Colab, copy lại chính xác toàn bộ chuỗi token (không thừa dấu cách) và cập nhật vào ô **API Token** trên Sidebar. |
+| **Mất kết nối / Expired Tunnel**<br>(*UI báo "Disconnected"*) | - Phiên làm việc Google Colab bị ngắt do hết hạn hoặc mất kết nối mạng.<br>- Tiến trình `cloudflared` Quick Tunnel bị dừng. | 1. Kiểm tra lại tab Google Colab.<br>2. Nếu runtime bị ngắt, chạy lại notebook.<br>3. Sao chép URL mới và dán vào ô **Colab API URL** ở thanh Sidebar của UI rồi bấm **Check connection**. |
+| **Lỗi 401 Unauthorized** | - Token trong file `.env` hoặc thanh Sidebar chưa được cấu hình.<br>- Token không khớp chính xác với Bearer Token trên Colab. | Kiểm tra lại thông báo ở cell cuối cùng của Colab, copy lại chính xác toàn bộ chuỗi token (không thừa dấu cách), dán vào ô **API Bearer Token** trên Sidebar rồi bấm **Check connection**. |
 | **Lỗi 409 Conflict ("busy")** | - GPU đang bận xử lý một request phân đoạn hoặc trợ lý khác.<br>- Hệ thống áp dụng khóa đơn nhiệm (`single-request lock`) để tránh tràn bộ nhớ VRAM. | Hệ thống không xếp hàng tự động. Bạn chỉ cần đợi từ 3–5 giây để request trước hoàn tất rồi bấm thực hiện lại. |
 | **Lỗi 413 Payload Too Large** | Kích thước file ảnh tải lên vượt quá giới hạn cấu hình của server (mặc định 20MB). | Dùng công cụ đồ họa nén nhẹ ảnh hoặc giảm độ phân giải xuống dưới mức 20MB trước khi tải lên. |
-| **Qwen OOM / Báo lỗi 503**<br>(*Prompt Assistant Unavailable*) | GPU Tesla T4 (16GB) bị tràn bộ nhớ VRAM khi nạp đồng thời cả Qwen3-VL-4B và SAM 3. | Hệ thống sẽ tự động giải phóng Qwen và tiếp tục duy trì SAM 3 hoạt động. Chuyển sang **Luồng A (Manual Mode)**: tự nhập prompt tiếng Anh trực tiếp để tiếp tục công việc bình thường. |
+| **Lỗi 503 trên /api/v1/segment**<br>(*SAM 3 Not Loaded*) | Mô hình SAM 3 chưa được nạp vào bộ nhớ GPU trên Colab, hoặc cell khởi tạo model gặp lỗi/chưa được chạy xong. | Mở lại notebook trên Colab, chạy lại cell nạp SAM 3 (`Sam3Engine.load()`), hoặc chọn **Runtime** > **Restart session and run all** nếu GPU bị lỗi trạng thái. |
+| **Lỗi 503 trên /api/v1/assistant/prompt**<br>(*Prompt Assistant Unavailable*) | Trợ lý Qwen3-VL-4B bị vô hiệu hóa (`ENABLE_QWEN=False`) hoặc gặp sự cố tràn bộ nhớ VRAM (OOM) khi nạp đồng thời cùng SAM 3 trên GPU Tesla T4 (16GB). | Hệ thống tự động giải phóng Qwen để bảo vệ SAM 3. Chuyển sang **Luồng A (Manual Mode)**: tự nhập trực tiếp prompt tiếng Anh để tiếp tục trích xuất mà không làm gián đoạn công việc. |
 | **SAM không tìm thấy đối tượng**<br>(*num_candidates = 0*) | - Prompt mô tả quá chung chung, dùng sai từ khóa hoặc sai ngữ nghĩa.<br>- Ngưỡng tin cậy (`confidence_threshold`) đang đặt quá cao.<br>- Đối tượng có độ tương phản quá kém so với nền. | 1. Đổi sang prompt mô tả cụ thể về hình dáng/chất liệu (vd: từ `logo` thành `round embroidered fabric patch`).<br>2. Chuyển sang mode `Box` hoặc `Text + Box` và vẽ bounding box định vị chính xác khu vực.<br>3. Hạ nhẹ ngưỡng `confidence_threshold` trên UI (ví dụ từ 0.35 xuống 0.25). |
 
 ---
