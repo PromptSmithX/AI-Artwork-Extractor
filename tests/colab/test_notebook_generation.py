@@ -327,3 +327,20 @@ def test_required_cells_present(notebook_data: Dict[str, Any]) -> None:
 
     # 10. External check
     assert "/api/v1/segment" in all_text
+
+
+def _code_cells(notebook_data: Dict[str, Any]) -> List[str]:
+    return ["".join(c["source"]) for c in notebook_data["cells"] if c["cell_type"] == "code"]
+
+
+def test_sam3_repo_not_shadowing_package(notebook_data: Dict[str, Any]) -> None:
+    """Repo must not be cloned to /content/sam3, which shadows the real `sam3` package."""
+    code = [c for c in _code_cells(notebook_data) if not c.startswith("%%writefile")]
+    all_code = "\n".join(code)
+    assert 'repo_dir = "/content/sam3_repo"' in all_code
+    assert '"/content/sam3"' not in all_code
+    assert "%cd /content/sam3\n" not in all_code
+    install = next(c for c in code if "pip\", \"install\", \"-e\"" in c)
+    assert "sys.path.insert(0, repo_dir)" in install
+    assert "import sam3.model_builder" in install
+    assert 'sys.path.insert(0, "/content")' not in all_code
