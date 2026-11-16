@@ -275,3 +275,81 @@ def test_vram_report():
         assert rep["free_gb"] == 8.0
         assert rep["total_gb"] == 16.0
         assert rep["allocated"] == 4.0
+
+
+def test_generate_casts_float_inputs():
+    """_generate casts floating-point tensors to model.dtype and non-floating to device."""
+    class FakeTensor:
+        def __init__(self, is_float: bool, shape=(1, 4)):
+            self._is_float = is_float
+            self.shape = shape
+            self.calls = []
+
+        def is_floating_point(self) -> bool:
+            return self._is_float
+
+        def to(self, device, dtype=None):
+            self.calls.append((device, dtype))
+            return self
+
+        def __getitem__(self, item):
+            return self
+
+    float_tensor = FakeTensor(is_float=True)
+    int_tensor = FakeTensor(is_float=False)
+
+    fake_processor = MagicMock()
+    fake_processor.apply_chat_template.return_value = {
+        "pixel_values": float_tensor,
+        "input_ids": int_tensor,
+    }
+    fake_processor.batch_decode.return_value = ['{"sam_prompt": "patch"}']
+
+    fake_model = MagicMock()
+    fake_model.device = "cuda:0"
+    fake_model.dtype = "fake_float16"
+    fake_model.generate.return_value = FakeTensor(is_float=False, shape=(1, 8))
+
+    asst = QwenPromptAssistant()
+    asst.model = fake_model
+    asst.processor = fake_processor
+
+    output = asst._generate([{"role": "user", "content": "hi"}])
+
+    assert output == '{"sam_prompt": "patch"}'
+    # Floating-point tensor cast to model.dtype
+    assert float_tensor.calls == [("cuda:0", "fake_float16")]
+    # Non-floating-point tensor moved to device without dtype
+    assert int_tensor.calls == [("cuda:0", None)]
+    # Verify generation kwargs
+    gen_call_kwargs = fake_model.generate.call_args[1]
+    assert gen_call_kwargs["do_sample"] is False
+    assert gen_call_kwargs["temperature"] is None
+    assert gen_call_kwargs["top_p"] is None
+    assert gen_call_kwargs["top_k"] is None
+
+
+def test_load_sets_dtype_and_calls_eval():
+    """load() configures dtype=torch.float16 and calls model.eval()."""
+    pytest.importorskip("torch")
+    pytest.importorskip("transformers")
+    import torch
+    import transformers
+
+    asst = QwenPromptAssistant()
+    mock_model = MagicMock()
+    mock_processor = MagicMock()
+
+    model_cls = getattr(transformers, "Qwen3VLForConditionalGeneration", transformers.AutoModelForImageTextToText)
+
+    with patch("torch.cuda.is_available", return_value=True), \
+         patch("torch.cuda.mem_get_info", return_value=(8 * 1024**3, 16 * 1024**3)), \
+         patch.object(transformers.AutoProcessor, "from_pretrained", return_value=mock_processor), \
+         patch.object(model_cls, "from_pretrained", return_value=mock_model) as mock_from_pretrained:
+        asst.load()
+
+    assert asst.loaded is True
+    assert asst.model is mock_model
+    mock_model.eval.assert_called_once()
+    assert mock_from_pretrained.call_args[1].get("dtype") == torch.float16
+

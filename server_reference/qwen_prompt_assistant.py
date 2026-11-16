@@ -259,7 +259,9 @@ class QwenPromptAssistant:
                 self.model_id,
                 quantization_config=bnb_config,
                 device_map="cuda:0",
+                dtype=torch.float16,
             )
+            self.model.eval()
         except Exception as e:
             self.unload()
             self.available = False
@@ -339,8 +341,13 @@ class QwenPromptAssistant:
                 return_tensors="pt",
             )
             device = getattr(self.model, "device", self.device)
+            model_dtype = getattr(self.model, "dtype", torch.float16)
             inputs = {
-                k: v.to(device) if hasattr(v, "to") else v
+                k: (
+                    v.to(device, dtype=model_dtype)
+                    if hasattr(v, "is_floating_point") and v.is_floating_point()
+                    else (v.to(device) if hasattr(v, "to") else v)
+                )
                 for k, v in inputs.items()
             }
             prompt_len = inputs["input_ids"].shape[1]
@@ -348,6 +355,9 @@ class QwenPromptAssistant:
                 **inputs,
                 max_new_tokens=self.max_new_tokens,
                 do_sample=False,
+                temperature=None,
+                top_p=None,
+                top_k=None,
             )
             trimmed_ids = generated_ids[:, prompt_len:]
             output_texts = self.processor.batch_decode(
@@ -355,6 +365,7 @@ class QwenPromptAssistant:
                 skip_special_tokens=True,
                 clean_up_tokenization_spaces=False,
             )
+            del inputs, generated_ids
             return output_texts[0] if output_texts else ""
 
     def suggest(
