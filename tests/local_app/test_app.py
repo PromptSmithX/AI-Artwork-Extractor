@@ -5,7 +5,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 from server_reference.schemas import HealthResponse
 
-from local_app.app import check_health, get_client, init_session_state
+from local_app.app import check_health, get_client, init_session_state, set_sam_prompt
 from local_app.remote_client import Disconnected
 
 
@@ -16,7 +16,7 @@ def test_app_ast_parse():
     assert isinstance(parsed, ast.Module)
 
 
-def test_init_session_state(monkeypatch):
+def test_init_session_state():
     import streamlit as st
 
     # Clear session state for test isolation
@@ -26,17 +26,28 @@ def test_init_session_state(monkeypatch):
     init_session_state()
 
     assert "config" in st.session_state
-    assert "api_url" in st.session_state
+    assert "input_api_url" in st.session_state
+    assert "input_api_token" in st.session_state
+    assert "sam_prompt_field" in st.session_state
+    assert "req_text_area" in st.session_state
     assert "confidence_threshold" in st.session_state
     assert st.session_state.confidence_threshold == 0.35
     assert st.session_state.uploaded_image_bytes is None
 
 
+def test_set_sam_prompt_callback():
+    import streamlit as st
+
+    init_session_state()
+    set_sam_prompt("patch embroidered badge")
+    assert st.session_state["sam_prompt_field"] == "patch embroidered badge"
+
+
 def test_get_client_configuration():
     import streamlit as st
 
-    st.session_state.api_url = "https://custom-colab.example.com"
-    st.session_state.api_token = "tok_123"
+    st.session_state["input_api_url"] = "https://custom-colab.example.com"
+    st.session_state["input_api_token"] = "tok_123"
 
     client = get_client()
     assert client.base_url == "https://custom-colab.example.com"

@@ -50,11 +50,11 @@ class ServerBusy(RemoteError):
 
 
 class AssistantUnavailable(RemoteError):
-    """Raised on 503 Service Unavailable (e.g. Qwen prompt assistant not loaded/OOM)."""
+    """Raised on 503 Service Unavailable specifically for Qwen prompt assistant."""
 
 
 class ApiError(RemoteError):
-    """Raised on other API errors (e.g. 400, 413, 422, 500, 502 non-Cloudflare)."""
+    """Raised on other API errors (e.g. 400, 413, 422, 500, 502, or 503 on segment)."""
 
     def __init__(self, status_code: int, detail: str = ""):
         self.status_code = status_code
@@ -202,7 +202,9 @@ class RemoteClient:
                 return True
         return False
 
-    def _handle_response(self, response: requests.Response) -> None:
+    def _handle_response(
+        self, response: requests.Response, is_assistant: bool = False
+    ) -> None:
         """Inspect status code and headers; raise appropriate RemoteError subclasses."""
         if self._check_cloudflare(response):
             raise Disconnected(
@@ -220,8 +222,14 @@ class RemoteClient:
 
         if response.status_code == 503:
             detail = self._extract_detail(response)
-            raise AssistantUnavailable(
-                detail or "Assistant or model is currently unavailable."
+            if is_assistant:
+                raise AssistantUnavailable(
+                    detail or "Prompt assistant or model is currently unavailable."
+                )
+            # 503 on segment or health indicates SAM not loaded on Colab
+            raise ApiError(
+                503,
+                detail or "SAM 3 model is not loaded or unavailable on Colab server.",
             )
 
         if response.status_code >= 400:
@@ -239,7 +247,7 @@ class RemoteClient:
         except requests.exceptions.RequestException as e:
             raise Disconnected(f"Health request failed: {e}") from e
 
-        self._handle_response(resp)
+        self._handle_response(resp, is_assistant=False)
         try:
             return HealthResponse.model_validate(resp.json())
         except Exception as e:
@@ -285,7 +293,7 @@ class RemoteClient:
         except requests.exceptions.RequestException as e:
             raise Disconnected(f"Prompt suggestion request failed: {e}") from e
 
-        self._handle_response(resp)
+        self._handle_response(resp, is_assistant=True)
         try:
             return PromptSuggestion.model_validate(resp.json())
         except Exception as e:
@@ -339,7 +347,7 @@ class RemoteClient:
         except requests.exceptions.RequestException as e:
             raise Disconnected(f"Segmentation request failed: {e}") from e
 
-        self._handle_response(resp)
+        self._handle_response(resp, is_assistant=False)
         return self._parse_zip_response(resp.content)
 
     def _parse_zip_response(self, zip_bytes: bytes) -> SegmentResult:

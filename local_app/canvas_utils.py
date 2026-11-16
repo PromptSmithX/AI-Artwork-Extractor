@@ -1,10 +1,30 @@
-"""Pure utility functions for canvas coordinate transformations and sizing.
+"""Pure utility functions for canvas coordinate transformations, sizing, and image loading.
 
 Fully unit-tested and independent of Streamlit UI rendering.
 """
 from __future__ import annotations
 
+import io
 from typing import Any, Dict, List, Optional, Sequence, Tuple
+
+from PIL import Image, ImageOps
+
+
+def load_display_image(image_bytes: bytes) -> Image.Image:
+    """Load an image from bytes and apply EXIF orientation transpose.
+
+    Ensures canvas display coordinates, bounding boxes, and previews match
+    the server's internal orientation (which also runs ImageOps.exif_transpose).
+
+    Args:
+        image_bytes: Raw binary bytes of the image file.
+
+    Returns:
+        PIL Image with EXIF orientation applied (transposed to upright).
+    """
+    raw_img = Image.open(io.BytesIO(image_bytes))
+    transposed = ImageOps.exif_transpose(raw_img)
+    return transposed if transposed is not None else raw_img
 
 
 def fit_display_size(

@@ -1,11 +1,42 @@
+import io
 import pytest
+from PIL import Image
+
 from local_app.canvas_utils import (
     canvas_rect_to_image_xyxy,
     extract_last_rect,
     fit_display_size,
+    load_display_image,
     norm_cxcywh_to_xyxy,
     xyxy_to_norm_cxcywh,
 )
+
+
+class TestLoadDisplayImage:
+    def test_exif_orientation_6_swaps_dimensions(self):
+        # Create a landscape image 300x150 with Orientation=6 (Rotate 90 CW)
+        img = Image.new("RGB", (300, 150), color="blue")
+        exif = img.getexif()
+        exif[0x0112] = 6  # EXIF Orientation tag 0x0112 = 6
+        buf = io.BytesIO()
+        img.save(buf, format="JPEG", exif=exif)
+        raw_bytes = buf.getvalue()
+
+        # Without exif_transpose, raw image is (300, 150)
+        raw_img = Image.open(io.BytesIO(raw_bytes))
+        assert raw_img.size == (300, 150)
+
+        # load_display_image transposes it to (150, 300)
+        display_img = load_display_image(raw_bytes)
+        assert display_img.size == (150, 300)
+
+    def test_image_without_exif_retains_dimensions(self):
+        img = Image.new("RGB", (400, 250), color="green")
+        buf = io.BytesIO()
+        img.save(buf, format="PNG")
+
+        display_img = load_display_image(buf.getvalue())
+        assert display_img.size == (400, 250)
 
 
 class TestFitDisplaySize:
@@ -66,8 +97,6 @@ class TestCanvasRectToImageXyxy:
     def test_clamping_to_image_boundaries(self):
         # User drags partially outside canvas (e.g. left=-50, top=-20, width=500, height=600)
         xyxy = canvas_rect_to_image_xyxy(-50, -20, 500, 600, 0.5, 800, 800)
-        # unscaled x1 = -100 -> clamped to 0.0
-        # unscaled x2 = 450 / 0.5 = 900 -> clamped to 800.0
         assert xyxy[0] == pytest.approx(0.0)
         assert xyxy[1] == pytest.approx(0.0)
         assert xyxy[2] == pytest.approx(800.0)

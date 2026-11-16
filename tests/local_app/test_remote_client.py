@@ -159,6 +159,18 @@ class TestErrorMappings:
         with pytest.raises(AssistantUnavailable, match="Assistant OOM"):
             client.suggest_prompt(b"bytes", "img.png", "request")
 
+    def test_503_on_segment_raises_api_error(self):
+        mock_session = MagicMock()
+        mock_session.post.return_value = make_fake_response(
+            503, json_data={"detail": "SAM 3 model not loaded"}
+        )
+        client = RemoteClient("https://colab.example.com", "token", session=mock_session)
+
+        with pytest.raises(ApiError) as exc_info:
+            client.segment(b"bytes", "img.png", Mode.TEXT, prompt="patch")
+        assert exc_info.value.status_code == 503
+        assert "SAM 3 model not loaded" in exc_info.value.detail
+
     def test_connection_error_raises_disconnected(self):
         mock_session = MagicMock()
         mock_session.get.side_effect = requests.exceptions.ConnectionError("Failed to reach host")

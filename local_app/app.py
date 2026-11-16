@@ -21,11 +21,25 @@ from PIL import Image
 # 2. Compatibility shim for streamlit-drawable-canvas on newer Streamlit versions
 try:
     import streamlit.elements.image as _st_image
+    import streamlit.elements.lib.image_utils as _image_utils
 
-    if not hasattr(_st_image, "image_to_url"):
-        import streamlit.elements.lib.image_utils as _image_utils
+    def _shim_image_to_url(
+        image,
+        width_or_layout=None,
+        clamp=False,
+        channels="RGB",
+        output_format="PNG",
+        image_id="",
+    ):
+        if not hasattr(width_or_layout, "width"):
+            layout_config = _st_image.create_layout_config(width=width_or_layout)
+        else:
+            layout_config = width_or_layout
+        return _image_utils.image_to_url(
+            image, layout_config, clamp, channels, output_format, image_id
+        )
 
-        _st_image.image_to_url = _image_utils.image_to_url
+    _st_image.image_to_url = _shim_image_to_url
 except Exception:
     pass
 
@@ -40,9 +54,11 @@ from local_app.canvas_utils import (
     canvas_rect_to_image_xyxy,
     extract_last_rect,
     fit_display_size,
+    load_display_image,
     xyxy_to_norm_cxcywh,
 )
 from local_app.remote_client import (
+    ApiError,
     AssistantUnavailable,
     AuthError,
     ClientConfig,
@@ -62,18 +78,24 @@ from server_reference.schemas import Mode, ScopePreference
 
 
 def init_session_state() -> None:
-    """Initialize Streamlit session state defaults."""
+    """Initialize Streamlit session state defaults without conflicting with widget keys."""
     if "config" not in st.session_state:
         st.session_state.config = load_config()
 
-    if "api_url" not in st.session_state:
-        st.session_state.api_url = st.session_state.config.url
+    if "input_api_url" not in st.session_state:
+        st.session_state["input_api_url"] = st.session_state.config.url
 
-    if "api_token" not in st.session_state:
-        st.session_state.api_token = st.session_state.config.token
+    if "input_api_token" not in st.session_state:
+        st.session_state["input_api_token"] = st.session_state.config.token
 
     if "confidence_threshold" not in st.session_state:
-        st.session_state.confidence_threshold = 0.35
+        st.session_state["confidence_threshold"] = 0.35
+
+    if "req_text_area" not in st.session_state:
+        st.session_state["req_text_area"] = ""
+
+    if "sam_prompt_field" not in st.session_state:
+        st.session_state["sam_prompt_field"] = ""
 
     if "uploaded_image_bytes" not in st.session_state:
         st.session_state.uploaded_image_bytes = None
@@ -83,12 +105,6 @@ def init_session_state() -> None:
 
     if "current_file_id" not in st.session_state:
         st.session_state.current_file_id = None
-
-    if "prompt_input" not in st.session_state:
-        st.session_state.prompt_input = ""
-
-    if "user_request_text" not in st.session_state:
-        st.session_state.user_request_text = ""
 
     if "prompt_suggestion" not in st.session_state:
         st.session_state.prompt_suggestion = None
@@ -113,9 +129,9 @@ def init_session_state() -> None:
 
 
 def get_client() -> RemoteClient:
-    """Return configured RemoteClient instance."""
-    url = st.session_state.get("api_url", "")
-    token = st.session_state.get("api_token", "")
+    """Return configured RemoteClient instance reading directly from session state."""
+    url = st.session_state.get("input_api_url", "")
+    token = st.session_state.get("input_api_token", "")
     timeout = st.session_state.config.timeout
     return RemoteClient(base_url=url, token=token, timeout=timeout)
 
@@ -146,26 +162,27 @@ def check_health(silent_error: bool = False) -> None:
         }
 
 
+def set_sam_prompt(new_prompt: str) -> None:
+    """Callback to update SAM prompt widget state reliably."""
+    st.session_state["sam_prompt_field"] = new_prompt
+
+
 def render_sidebar() -> None:
-    """Render sidebar connection controls and health display."""
+    """Render sidebar connection controls and health display using session-state keys."""
     st.sidebar.title("Connection & Settings")
 
-    api_url = st.sidebar.text_input(
+    st.sidebar.text_input(
         "Colab API URL",
-        value=st.session_state.api_url,
-        help="Cloudflare Quick Tunnel URL (e.g. https://xxxx.trycloudflare.com)",
         key="input_api_url",
+        help="Cloudflare Quick Tunnel URL (e.g. https://xxxx.trycloudflare.com)",
     )
-    st.session_state.api_url = api_url.strip()
 
-    api_token = st.sidebar.text_input(
+    st.sidebar.text_input(
         "API Bearer Token",
-        value=st.session_state.api_token,
         type="password",
-        help="Secret token printed in Colab output",
         key="input_api_token",
+        help="Secret token printed in Colab output",
     )
-    st.session_state.api_token = api_token.strip()
 
     col_btn, _ = st.sidebar.columns([1, 1])
     with col_btn:
@@ -193,15 +210,14 @@ def render_sidebar() -> None:
 
     st.sidebar.markdown("---")
     st.sidebar.subheader("Inference Settings")
-    threshold = st.sidebar.slider(
+    st.sidebar.slider(
         "Confidence Threshold",
         min_value=0.05,
         max_value=0.95,
-        value=float(st.session_state.confidence_threshold),
         step=0.05,
+        key="confidence_threshold",
         help="SAM 3 detection confidence threshold (default 0.35)",
     )
-    st.session_state.confidence_threshold = threshold
 
 
 def main() -> None:
@@ -211,7 +227,7 @@ def main() -> None:
     # Automatic initial health check on first load
     if not st.session_state.initial_health_checked:
         st.session_state.initial_health_checked = True
-        if st.session_state.api_url:
+        if st.session_state.get("input_api_url"):
             check_health(silent_error=True)
 
     render_sidebar()
@@ -264,10 +280,10 @@ def main() -> None:
                 st.session_state.prompt_suggestion = None
 
         if st.session_state.uploaded_image_bytes:
-            image = Image.open(io.BytesIO(st.session_state.uploaded_image_bytes))
-            st.caption(f"**Dimensions:** {image.width} × {image.height} px")
+            display_image = load_display_image(st.session_state.uploaded_image_bytes)
+            st.caption(f"**Dimensions:** {display_image.width} × {display_image.height} px")
         else:
-            image = None
+            display_image = None
 
         mode_choice = st.radio(
             "Extraction Mode",
@@ -287,8 +303,8 @@ def main() -> None:
     # ==========================
     with col_canvas:
         st.subheader("2. IMAGE CANVAS")
-        if image is not None:
-            img_w, img_h = image.width, image.height
+        if display_image is not None:
+            img_w, img_h = display_image.width, display_image.height
             disp_w, disp_h, scale = fit_display_size(
                 img_w, img_h, max_w=650, max_h=550
             )
@@ -299,7 +315,7 @@ def main() -> None:
                     "Vẽ bounding box xung quanh artwork bằng chuột (chế độ Rectangle):"
                 )
                 try:
-                    display_bg = image.resize((disp_w, disp_h))
+                    display_bg = display_image.resize((disp_w, disp_h))
                     canvas_result = st_canvas(
                         fill_color="rgba(255, 75, 75, 0.2)",
                         stroke_width=2,
@@ -368,7 +384,7 @@ def main() -> None:
                     st.session_state.current_box_xyxy = xyxy
                     st.session_state.current_box_norm = norm_box
 
-                    preview_box_img = draw_bbox(image, xyxy, color="red", width=3)
+                    preview_box_img = draw_bbox(display_image, xyxy, color="red", width=3)
                     st.image(
                         preview_box_img,
                         caption=f"Box: {xyxy} px | norm: {norm_box}",
@@ -386,14 +402,13 @@ def main() -> None:
     with col_prompt:
         st.subheader("3. PROMPT")
 
-        user_req = st.text_area(
+        st.text_area(
             "Yêu cầu tự nhiên (Tiếng Việt):",
-            value=st.session_state.user_request_text,
+            key="req_text_area",
             placeholder="Ví dụ: Tách toàn bộ patch vuông ở ngực áo, bao gồm cả viền vải...",
             help="Qwen Prompt Assistant sẽ phân tích yêu cầu này và gợi ý prompt chuẩn cho SAM 3",
-            key="req_text_area",
         )
-        st.session_state.user_request_text = user_req
+        user_req = st.session_state.get("req_text_area", "")
 
         scope_pref = st.selectbox(
             "Scope Preference:",
@@ -418,7 +433,7 @@ def main() -> None:
                             scope_preference=ScopePreference(scope_pref),
                         )
                         st.session_state.prompt_suggestion = suggestion
-                        st.session_state.prompt_input = suggestion.sam_prompt
+                        st.session_state["sam_prompt_field"] = suggestion.sam_prompt
                     except AssistantUnavailable:
                         st.warning(
                             "Prompt Assistant tạm thời không khả dụng — dùng prompt thủ công."
@@ -450,23 +465,23 @@ def main() -> None:
                 if suggestion.alternative_prompts:
                     st.markdown("**Gợi ý thay thế:**")
                     for alt_idx, alt_p in enumerate(suggestion.alternative_prompts):
-                        if st.button(
-                            f"Use: {alt_p}", key=f"btn_alt_{alt_idx}"
-                        ):
-                            st.session_state.prompt_input = alt_p
-                            st.rerun()
+                        st.button(
+                            f"Use: {alt_p}",
+                            key=f"btn_alt_{alt_idx}",
+                            on_click=set_sam_prompt,
+                            args=(alt_p,),
+                        )
 
         st.markdown("---")
 
-        # Editable SAM prompt input
-        sam_prompt_val = st.text_input(
+        # Editable SAM prompt input (using session-state-key pattern without value=)
+        st.text_input(
             "SAM 3 Prompt (English):",
-            value=st.session_state.prompt_input,
+            key="sam_prompt_field",
             placeholder="e.g. square embroidered patch",
             help="Prompt tiếng Anh được xác nhận bởi người dùng để gửi cho SAM 3",
-            key="sam_prompt_field",
         )
-        st.session_state.prompt_input = sam_prompt_val
+        sam_prompt_val = st.session_state.get("sam_prompt_field", "").strip()
 
         # Run SAM 3 Button
         run_sam = st.button(
@@ -478,7 +493,7 @@ def main() -> None:
                 st.error("Vui lòng upload ảnh sản phẩm trước.")
             elif (
                 selected_mode in (Mode.TEXT, Mode.TEXT_BOX)
-                and not sam_prompt_val.strip()
+                and not sam_prompt_val
             ):
                 st.error("Vui lòng nhập SAM 3 prompt cho Text / Text + Box mode.")
             elif (
@@ -496,13 +511,13 @@ def main() -> None:
                             image_bytes=st.session_state.uploaded_image_bytes,
                             filename=st.session_state.uploaded_image_name,
                             mode=selected_mode,
-                            prompt=sam_prompt_val.strip()
+                            prompt=sam_prompt_val
                             if selected_mode != Mode.BOX
                             else None,
                             bbox=st.session_state.current_box_norm
                             if selected_mode != Mode.TEXT
                             else None,
-                            threshold=st.session_state.confidence_threshold,
+                            threshold=float(st.session_state.get("confidence_threshold", 0.35)),
                         )
                         st.session_state.segment_result = res
                         st.session_state.selected_candidate_idx = None
@@ -516,6 +531,11 @@ def main() -> None:
                         st.error(f"Lỗi xác thực (401): {e}")
                     except ServerBusy as e:
                         st.warning(f"Server Colab đang bận: {e}")
+                    except ApiError as e:
+                        if e.status_code == 503:
+                            st.error(f"SAM 3 chưa sẵn sàng trên Colab (503): {e.detail}")
+                        else:
+                            st.error(f"Lỗi API ({e.status_code}): {e.detail}")
                     except RemoteError as e:
                         st.error(f"Lỗi API: {e}")
                     except Exception as e:
@@ -584,7 +604,7 @@ def main() -> None:
         )
 
         orig_img = (
-            Image.open(io.BytesIO(st.session_state.uploaded_image_bytes))
+            load_display_image(st.session_state.uploaded_image_bytes)
             if st.session_state.uploaded_image_bytes
             else None
         )
@@ -597,7 +617,7 @@ def main() -> None:
             if orig_img:
                 st.image(
                     orig_img,
-                    caption="Original Image",
+                    caption="Original Image (EXIF transposed)",
                     use_container_width=True,
                 )
 
