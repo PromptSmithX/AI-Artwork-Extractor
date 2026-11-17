@@ -1,4 +1,4 @@
-import React from 'react'
+import React, { useId } from 'react'
 
 export interface SegmentOption<T extends string = string> {
   value: T
@@ -8,6 +8,7 @@ export interface SegmentOption<T extends string = string> {
 }
 
 export interface SegmentedControlProps<T extends string = string> {
+  name?: string
   options: SegmentOption<T>[]
   value: T
   onChange: (value: T) => void
@@ -18,6 +19,7 @@ export interface SegmentedControlProps<T extends string = string> {
 }
 
 export function SegmentedControl<T extends string = string>({
+  name: nameProp,
   options,
   value,
   onChange,
@@ -26,6 +28,9 @@ export function SegmentedControl<T extends string = string>({
   className = '',
   style,
 }: SegmentedControlProps<T>) {
+  const generatedId = useId()
+  const groupName = nameProp || `segmented-${generatedId}`
+
   return (
     <div
       role="radiogroup"
@@ -44,15 +49,12 @@ export function SegmentedControl<T extends string = string>({
       {options.map((opt) => {
         const isSelected = opt.value === value
         return (
-          <button
+          <label
             key={opt.value}
-            type="button"
-            role="radio"
-            aria-checked={isSelected}
-            disabled={opt.disabled}
-            onClick={() => onChange(opt.value)}
+            className={`app-segmented-pill ${isSelected ? 'selected' : ''}`}
             style={{
               flex: fullWidth ? 1 : 'none',
+              position: 'relative',
               display: 'inline-flex',
               alignItems: 'center',
               justifyContent: 'center',
@@ -74,13 +76,44 @@ export function SegmentedControl<T extends string = string>({
               whiteSpace: 'nowrap',
             }}
           >
-            {opt.icon && (
-              <span style={{ display: 'flex', opacity: isSelected ? 1 : 0.7 }}>
-                {opt.icon}
-              </span>
-            )}
-            {opt.label}
-          </button>
+            <input
+              type="radio"
+              name={groupName}
+              value={opt.value}
+              checked={isSelected}
+              aria-checked={isSelected}
+              disabled={opt.disabled}
+              onChange={() => onChange(opt.value)}
+              style={{
+                position: 'absolute',
+                inset: 0,
+                width: '100%',
+                height: '100%',
+                opacity: 0,
+                margin: 0,
+                padding: 0,
+                cursor: opt.disabled ? 'not-allowed' : 'pointer',
+                zIndex: 1,
+              }}
+            />
+            <span
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '6px',
+                pointerEvents: 'none',
+                position: 'relative',
+                zIndex: 0,
+              }}
+            >
+              {opt.icon && (
+                <span style={{ display: 'flex', opacity: isSelected ? 1 : 0.7 }}>
+                  {opt.icon}
+                </span>
+              )}
+              {opt.label}
+            </span>
+          </label>
         )
       })}
     </div>

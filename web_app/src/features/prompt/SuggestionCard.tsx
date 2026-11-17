@@ -187,6 +187,28 @@ export const SuggestionCard: React.FC<SuggestionCardProps> = ({ className = '', 
           </div>
         </div>
       )}
+
+      {/* Kept Prompt Hint when prompt differs from suggestion */}
+      {suggestion.sam_prompt !== currentPrompt && (
+        <div
+          className="app-suggestion-kept-hint"
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: '6px',
+            padding: '6px 8px',
+            background: 'var(--bg-canvas)',
+            border: '1px solid var(--border-subtle)',
+            borderRadius: 'var(--radius-sm)',
+            fontSize: '11px',
+            color: 'var(--text-secondary)',
+            marginTop: '2px',
+          }}
+        >
+          <span style={{ fontSize: '12px' }}>💡</span>
+          <span>Prompt hiện tại được giữ nguyên — bấm ★ để dùng gợi ý</span>
+        </div>
+      )}
     </div>
   )
 }

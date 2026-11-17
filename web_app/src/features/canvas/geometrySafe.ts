@@ -9,7 +9,13 @@ export function safeDisplayDragToImageBox(
   naturalH: number,
 ): BoxXYXY {
   try {
-    return boxCore.displayDragToImageBox(a, b, scale, naturalW, naturalH)
+    const raw = boxCore.displayDragToImageBox(a, b, scale, naturalW, naturalH)
+    return {
+      x1: Math.round(raw.x1),
+      y1: Math.round(raw.y1),
+      x2: Math.round(raw.x2),
+      y2: Math.round(raw.y2),
+    }
   } catch {
     const s = scale > 0 ? scale : 1
     const x1 = Math.max(0, Math.min(naturalW, Math.min(a.x, b.x) / s))
