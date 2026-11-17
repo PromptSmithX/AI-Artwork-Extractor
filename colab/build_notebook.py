@@ -57,7 +57,7 @@ def generate_notebook(repo_root: Optional[Path] = None) -> Dict[str, Any]:
             "\n"
             "Notebook này triển khai backend FastAPI inference server trên Google Colab T4 16GB, "
             "tích hợp Meta SAM 3 image model và Qwen3-VL-4B Prompt Assistant (4-bit), "
-            "đồng thời mở Cloudflare Quick Tunnel để kết nối với ứng dụng local trên laptop.\n"
+            "đồng thời mở Cloudflare Quick Tunnel để kết nối với React Web UI trên máy designer.\n"
             "\n"
             "## Trước khi chạy\n"
             "\n"
@@ -631,9 +631,9 @@ def generate_notebook(repo_root: Optional[Path] = None) -> Dict[str, Any]:
     # 14. Print URL, Token, .env lines, curl commands
     cells.append(
         _make_markdown_cell(
-            "## 13. Thông tin kết nối & Cấu hình cho Local App\n"
+            "## 13. Thông tin kết nối & Cấu hình cho Web UI\n"
             "\n"
-            "Sao chép thông tin URL và Bearer Token vào file `local_app/.env` trên laptop để Streamlit UI có thể kết nối.",
+            "Sao chép thông tin URL và Bearer Token để dán vào hộp thoại kết nối trên Web UI ('Cài đặt kết nối API').",
             next_id("h_connect_info"),
         )
     )
@@ -647,10 +647,9 @@ def generate_notebook(repo_root: Optional[Path] = None) -> Dict[str, Any]:
             "print(\"WARNING: Do NOT share this token. It grants full access to your GPU server.\")\n"
             "print(\"=\" * 72)\n"
             "\n"
-            "print(\"\\n# Copy the lines below into your laptop's local_app/.env:\")\n"
+            "print(\"\\n# Dán URL và Token vào hộp thoại kết nối trên Web UI ('Cài đặt kết nối API'):\")\n"
             "print(f\"COLAB_API_URL={tunnel_url}\")\n"
             "print(f\"COLAB_API_TOKEN={API_TOKEN}\")\n"
-            "print(\"REQUEST_TIMEOUT_SECONDS=180\")\n"
             "print(\"-\" * 72)\n"
             "\n"
             "print(\"\\n# Test curl commands:\")\n"
@@ -783,7 +782,7 @@ def generate_notebook(repo_root: Optional[Path] = None) -> Dict[str, Any]:
             "\n"
             "- **Tunnel URL thay đổi khi khởi động lại**:\n"
             "  Cloudflare Quick Tunnel tự động cấp một URL `https://*.trycloudflare.com` ngẫu nhiên mỗi khi tiến trình chạy lại. "
-            "  Khi restart tunnel, bạn cần copy URL mới vào `local_app/.env` hoặc cập nhật trực tiếp tại giao diện Web UI.\n"
+            "  Khi restart tunnel, bạn chỉ cần cập nhật URL mới vào hộp thoại kết nối trên Web UI ('Cài đặt kết nối API').\n"
             "\n"
             "- **Quick Tunnel aborts responses > 100s (Quá thời gian chờ phản hồi)**:\n"
             "  Cloudflare Quick Tunnel tự động ngắt kết nối với các response kéo dài hơn ~100 giây. "
