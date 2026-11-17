@@ -316,4 +316,73 @@ def test_export_zero_candidates():
 
         meta = SegmentMetadata.model_validate_json(zf.read("result/metadata.json"))
         assert meta.num_candidates == 0
+        assert meta.num_candidates_total == 0
         assert meta.candidates == []
+
+
+def test_export_uses_zip_stored_and_compresses_png():
+    """Verify ZIP uses ZIP_STORED and PNG files are valid."""
+    img = _create_test_image("RGB", size=(100, 80))
+    mask = np.ones((1, 80, 100), dtype=bool)
+    seg_res = SegResult(
+        masks=mask,
+        boxes_xyxy=np.array([[0.0, 0.0, 100.0, 80.0]], dtype=np.float32),
+        scores=np.array([0.90], dtype=np.float32),
+    )
+    zip_bytes = build_result_zip(
+        img,
+        seg_res,
+        prompt="test",
+        mode=Mode.TEXT,
+        bbox_input=None,
+        threshold=0.35,
+        elapsed_ms=10,
+    )
+    with zipfile.ZipFile(io.BytesIO(zip_bytes), "r") as zf:
+        for info in zf.infolist():
+            assert info.compress_type == zipfile.ZIP_STORED
+
+
+def test_export_max_candidates_cap_and_num_candidates_total():
+    """Verify max_candidates limits exported items and num_candidates_total reflects total."""
+    img = _create_test_image("RGB", size=(50, 50))
+    n_total = 16
+    masks = np.ones((n_total, 50, 50), dtype=bool)
+    boxes = np.tile([0.0, 0.0, 50.0, 50.0], (n_total, 1)).astype(np.float32)
+    scores = np.linspace(0.99, 0.10, n_total, dtype=np.float32)
+
+    seg_res = SegResult(masks=masks, boxes_xyxy=boxes, scores=scores)
+
+    # Test default max_candidates = 12
+    zip_bytes_default = build_result_zip(
+        img,
+        seg_res,
+        prompt="capping test",
+        mode=Mode.TEXT,
+        bbox_input=None,
+        threshold=0.35,
+        elapsed_ms=25,
+    )
+    with zipfile.ZipFile(io.BytesIO(zip_bytes_default), "r") as zf:
+        meta = SegmentMetadata.model_validate_json(zf.read("result/metadata.json"))
+        assert meta.num_candidates == 12
+        assert meta.num_candidates_total == 16
+        assert len(meta.candidates) == 12
+
+    # Test custom max_candidates = 5
+    zip_bytes_5 = build_result_zip(
+        img,
+        seg_res,
+        prompt="custom cap",
+        mode=Mode.TEXT,
+        bbox_input=None,
+        threshold=0.35,
+        elapsed_ms=25,
+        max_candidates=5,
+    )
+    with zipfile.ZipFile(io.BytesIO(zip_bytes_5), "r") as zf:
+        meta_5 = SegmentMetadata.model_validate_json(zf.read("result/metadata.json"))
+        assert meta_5.num_candidates == 5
+        assert meta_5.num_candidates_total == 16
+        assert len(meta_5.candidates) == 5
+
