@@ -239,6 +239,9 @@ export function createApiClient(config: ConnectionConfig): ApiClient {
       if (req.confidenceThreshold !== undefined && req.confidenceThreshold !== null) {
         formData.append('confidence_threshold', String(req.confidenceThreshold))
       }
+      if (req.exportProfile !== undefined && req.exportProfile !== null) {
+        formData.append('export_profile', req.exportProfile)
+      }
 
       const headers: Record<string, string> = {}
       if (token) {

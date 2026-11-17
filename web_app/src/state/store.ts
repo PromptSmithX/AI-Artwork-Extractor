@@ -6,6 +6,7 @@ import { create } from 'zustand'
 import { createApiClient, type ApiClient } from '../core/api/client'
 import { ApiError } from '../core/api/errors'
 import { loadConnectionConfig, saveConnectionConfig } from '../core/config/storage'
+import { composeFullCutout } from '../core/export/fullCutout'
 import { boxToNormCxCyWh, isUsableBox } from '../core/geometry/box'
 import type {
   BoxXYXY,
@@ -75,6 +76,7 @@ export interface AppState {
   runSegmentation: () => Promise<void>
   cancelSegmentation: () => void
   selectCandidate: (id: number | null) => void
+  getFullCutoutBlob: (candidateId: number) => Promise<Blob | null>
 }
 
 type ApiClientFactory = (config: ConnectionConfig) => ApiClient
@@ -469,5 +471,44 @@ export const useAppStore = create<AppState>()((set, get) => ({
 
   selectCandidate: (id: number | null) => {
     set({ selectedCandidateId: id })
+  },
+
+  getFullCutoutBlob: async (candidateId: number): Promise<Blob | null> => {
+    const result = get().result
+    if (!result) return null
+
+    const candidate = result.candidates.find((c) => c.meta.id === candidateId)
+    if (!candidate) return null
+
+    if (candidate.blobs.cutout) {
+      return candidate.blobs.cutout
+    }
+
+    const cropBlob = candidate.blobs.cutout_crop
+    const cropBox = candidate.meta.crop_box_xyxy_px
+    const imageSize = result.metadata.image_size
+
+    if (!cropBlob || !cropBox || !imageSize) {
+      return null
+    }
+
+    try {
+      const fullBlob = await composeFullCutout(cropBlob, cropBox, imageSize)
+      candidate.blobs.cutout = fullBlob
+
+      if (!candidate.urls.cutout) {
+        const url = URL.createObjectURL(fullBlob)
+        candidate.urls.cutout = url
+        const prevDispose = result.dispose
+        result.dispose = () => {
+          URL.revokeObjectURL(url)
+          prevDispose()
+        }
+      }
+
+      return fullBlob
+    } catch {
+      return null
+    }
   },
 }))

@@ -77,6 +77,57 @@ describe('parseSegmentZip', () => {
     expect(revokeSpy).toHaveBeenCalledTimes(4)
   })
 
+  it('parses lean profile zip without candidate cutout.png file', async () => {
+    const metadata: SegmentMetadata = {
+      prompt: 'patch',
+      mode: 'text',
+      bbox_input: null,
+      image_size: [800, 600],
+      confidence_threshold: 0.35,
+      crop_padding_px: 12,
+      export_profile: 'lean',
+      overlay_max_side: 768,
+      elapsed_ms: 100,
+      num_candidates: 1,
+      num_candidates_total: 1,
+      candidates: [
+        {
+          id: 0,
+          score: 0.9,
+          bbox_xyxy_px: [100, 100, 400, 400],
+          crop_box_xyxy_px: [88, 88, 412, 412],
+          mask_area_px: 5000,
+          files: {
+            mask: 'candidate_00_mask.png',
+            overlay: 'candidate_00_overlay.png',
+            cutout_crop: 'candidate_00_cutout_crop.png',
+          },
+        },
+      ],
+    }
+
+    const zip = new JSZip()
+    const folder = zip.folder('result')!
+    folder.file('metadata.json', JSON.stringify(metadata))
+    folder.file('candidate_00_mask.png', TINY_PNG)
+    folder.file('candidate_00_overlay.png', TINY_PNG)
+    folder.file('candidate_00_cutout_crop.png', TINY_PNG)
+
+    const zipBlob = await zip.generateAsync({ type: 'blob' })
+    const result = await parseSegmentZip(zipBlob)
+
+    expect(result.metadata.export_profile).toBe('lean')
+    expect(result.candidates).toHaveLength(1)
+    const cand = result.candidates[0]
+    expect(cand.blobs.mask).toBeDefined()
+    expect(cand.blobs.overlay).toBeDefined()
+    expect(cand.blobs.cutout_crop).toBeDefined()
+    expect(cand.blobs.cutout).toBeUndefined()
+    expect(cand.meta.crop_box_xyxy_px).toEqual([88, 88, 412, 412])
+
+    result.dispose()
+  })
+
   it('falls back to root metadata.json if result/ prefix is absent', async () => {
     const metadata: SegmentMetadata = {
       prompt: 'cat',
