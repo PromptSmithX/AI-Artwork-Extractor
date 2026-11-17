@@ -92,20 +92,15 @@ function getApiClient(config: ConnectionConfig): ApiClient {
   return apiClientFactory(config)
 }
 
-let activeAbortController: AbortController | null = null
+export type ImageDimensionReader = (
+  file: File,
+  objectUrl: string,
+) => Promise<{ naturalWidth: number; naturalHeight: number }>
 
-async function readNaturalDimensions(
+async function defaultImageDimensionReader(
   file: File,
   objectUrl: string,
 ): Promise<{ naturalWidth: number; naturalHeight: number }> {
-  // Check if test provided mock dimensions on the File object
-  if ('_mockWidth' in file && '_mockHeight' in file) {
-    return {
-      naturalWidth: Number((file as unknown as { _mockWidth: number })._mockWidth),
-      naturalHeight: Number((file as unknown as { _mockHeight: number })._mockHeight),
-    }
-  }
-
   if (typeof createImageBitmap === 'function') {
     try {
       const bmp = await createImageBitmap(file, { imageOrientation: 'from-image' })
@@ -137,6 +132,17 @@ async function readNaturalDimensions(
 
   throw new Error('No image decoding facility available in environment')
 }
+
+let imageDimensionReader: ImageDimensionReader = defaultImageDimensionReader
+
+/**
+ * Dependency injection hook for tests to mock image dimension reading.
+ */
+export function setImageDimensionReader(reader: ImageDimensionReader | null): void {
+  imageDimensionReader = reader ?? defaultImageDimensionReader
+}
+
+let activeAbortController: AbortController | null = null
 
 export const useAppStore = create<AppState>()((set, get) => ({
   connection: loadConnectionConfig(),
@@ -192,14 +198,14 @@ export const useAppStore = create<AppState>()((set, get) => ({
     if (!file.type || !allowed.includes(file.type.toLowerCase())) {
       const errorMsg = `Unsupported image type "${file.type}". Allowed types: JPEG, PNG, WebP.`
       set({ imageStatus: 'error', imageError: errorMsg })
-      throw new Error(errorMsg)
+      return
     }
 
     const MAX_SIZE = 20 * 1024 * 1024
     if (file.size > MAX_SIZE) {
       const errorMsg = `Image size (${(file.size / (1024 * 1024)).toFixed(1)} MB) exceeds 20 MB limit.`
       set({ imageStatus: 'error', imageError: errorMsg })
-      throw new Error(errorMsg)
+      return
     }
 
     const prevImage = get().image
@@ -215,12 +221,12 @@ export const useAppStore = create<AppState>()((set, get) => ({
     const url = URL.createObjectURL(file)
     let dimensions: { naturalWidth: number; naturalHeight: number }
     try {
-      dimensions = await readNaturalDimensions(file, url)
+      dimensions = await imageDimensionReader(file, url)
     } catch (err) {
       URL.revokeObjectURL(url)
       const errorMsg = err instanceof Error ? err.message : String(err)
       set({ imageStatus: 'error', imageError: errorMsg })
-      throw err
+      return
     }
 
     set({
@@ -421,6 +427,8 @@ export const useAppStore = create<AppState>()((set, get) => ({
           segmentStartedAt: null,
           selectedCandidateId: null,
         })
+      } else {
+        res.dispose()
       }
     } catch (err: unknown) {
       const wasAborted =

@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ApiError } from '../core/api/errors'
-import { setApiClientFactory, useAppStore } from './store'
+import { setApiClientFactory, setImageDimensionReader, useAppStore } from './store'
 import type { ApiClient } from '../core/api/client'
 import type { HealthResponse, PromptSuggestion, SegmentResult } from '../core/types'
 
@@ -9,6 +9,7 @@ describe('useAppStore', () => {
 
   beforeEach(() => {
     localStorage.clear()
+    setImageDimensionReader(async () => ({ naturalWidth: 800, naturalHeight: 600 }))
     useAppStore.setState({
       connection: { baseUrl: 'http://localhost:8000', token: 'test-token', timeoutMs: 10_000 },
       health: null,
@@ -43,6 +44,7 @@ describe('useAppStore', () => {
 
   afterEach(() => {
     setApiClientFactory(null)
+    setImageDimensionReader(null)
     vi.restoreAllMocks()
   })
 
@@ -90,9 +92,6 @@ describe('useAppStore', () => {
       vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:mock-image')
 
       const dummyFile = new File(['dummy'], 'sample.png', { type: 'image/png' })
-      // Attach mock dimensions for test reader
-      ;(dummyFile as unknown as { _mockWidth: number; _mockHeight: number })._mockWidth = 800
-      ;(dummyFile as unknown as { _mockWidth: number; _mockHeight: number })._mockHeight = 600
 
       // Pre-set some downstream fields
       useAppStore.setState({
@@ -107,30 +106,44 @@ describe('useAppStore', () => {
       expect(state.image?.url).toBe('blob:mock-image')
       expect(state.image?.naturalWidth).toBe(800)
       expect(state.image?.naturalHeight).toBe(600)
+      expect(state.imageStatus).toBe('success')
+      expect(state.imageError).toBeNull()
       expect(state.box).toBeNull()
       expect(state.selectedCandidateId).toBeNull()
 
       // Loading another image revokes the previous one
+      setImageDimensionReader(async () => ({ naturalWidth: 1000, naturalHeight: 500 }))
       const dummyFile2 = new File(['dummy2'], 'sample2.jpg', { type: 'image/jpeg' })
-      ;(dummyFile2 as unknown as { _mockWidth: number; _mockHeight: number })._mockWidth = 1000
-      ;(dummyFile2 as unknown as { _mockWidth: number; _mockHeight: number })._mockHeight = 500
 
       await useAppStore.getState().loadImage(dummyFile2)
       expect(revokeSpy).toHaveBeenCalledWith('blob:mock-image')
+      expect(useAppStore.getState().image?.naturalWidth).toBe(1000)
     })
 
-    it('rejects unsupported file type', async () => {
+    it('rejects unsupported file type without throwing', async () => {
       const badFile = new File(['text'], 'notes.txt', { type: 'text/plain' })
-      await expect(useAppStore.getState().loadImage(badFile)).rejects.toThrow(/Unsupported image type/)
+      await useAppStore.getState().loadImage(badFile)
       expect(useAppStore.getState().imageStatus).toBe('error')
       expect(useAppStore.getState().imageError).toContain('Unsupported image type')
+      expect(useAppStore.getState().image).toBeNull()
     })
 
-    it('rejects image over 20 MB', async () => {
+    it('rejects image over 20 MB without throwing', async () => {
       const largeFile = new File([''], 'huge.png', { type: 'image/png' })
       Object.defineProperty(largeFile, 'size', { value: 25 * 1024 * 1024 })
-      await expect(useAppStore.getState().loadImage(largeFile)).rejects.toThrow(/exceeds 20 MB/)
+      await useAppStore.getState().loadImage(largeFile)
       expect(useAppStore.getState().imageStatus).toBe('error')
+      expect(useAppStore.getState().imageError).toContain('exceeds 20 MB')
+    })
+
+    it('handles image decoding failure without throwing', async () => {
+      setImageDimensionReader(async () => {
+        throw new Error('Image decoding failed')
+      })
+      const dummyFile = new File(['dummy'], 'broken.png', { type: 'image/png' })
+      await useAppStore.getState().loadImage(dummyFile)
+      expect(useAppStore.getState().imageStatus).toBe('error')
+      expect(useAppStore.getState().imageError).toContain('Image decoding failed')
     })
 
     it('clearImage revokes URL and resets image state', () => {
@@ -355,6 +368,65 @@ describe('useAppStore', () => {
       expect(aborted).toBe(true)
       expect(useAppStore.getState().segmentStatus).toBe('idle')
       expect(useAppStore.getState().segmentError).toBeNull()
+    })
+
+    it('disposes late result when request is superseded while in flight', async () => {
+      const disposeSpy = vi.fn()
+      let resolveFirst: (res: SegmentResult) => void
+      const firstPromise = new Promise<SegmentResult>((resolve) => {
+        resolveFirst = resolve
+      })
+
+      vi.mocked(mockApiClient.segment!)
+        .mockReturnValueOnce(firstPromise)
+        .mockResolvedValueOnce({
+          metadata: {
+            prompt: 'second',
+            mode: 'text',
+            bbox_input: null,
+            image_size: [1000, 1000],
+            confidence_threshold: 0.35,
+            crop_padding_px: 12,
+            elapsed_ms: 10,
+            num_candidates: 0,
+            candidates: [],
+          },
+          candidates: [],
+          zipBlob: new Blob(),
+          dispose: vi.fn(),
+        })
+
+      useAppStore.setState({ mode: 'text', prompt: 'first' })
+      const run1 = useAppStore.getState().runSegmentation()
+
+      // Supersede with a second request
+      useAppStore.setState({ prompt: 'second' })
+      const run2 = useAppStore.getState().runSegmentation()
+
+      // Now resolve the first request
+      resolveFirst!({
+        metadata: {
+          prompt: 'first',
+          mode: 'text',
+          bbox_input: null,
+          image_size: [1000, 1000],
+          confidence_threshold: 0.35,
+          crop_padding_px: 12,
+          elapsed_ms: 10,
+          num_candidates: 0,
+          candidates: [],
+        },
+        candidates: [],
+        zipBlob: new Blob(),
+        dispose: disposeSpy,
+      })
+
+      await run1
+      await run2
+
+      // The late first result must have been disposed to prevent leaking URLs
+      expect(disposeSpy).toHaveBeenCalledTimes(1)
+      expect(useAppStore.getState().result?.metadata.prompt).toBe('second')
     })
 
     it('selectCandidate sets selectedCandidateId', () => {
