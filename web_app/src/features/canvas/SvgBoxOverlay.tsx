@@ -42,8 +42,8 @@ export const SvgBoxOverlay: React.FC<SvgBoxOverlayProps> = ({
   const displayBox = box ? safeImageBoxToDisplay(box, scale) : null
   const boxW = displayBox ? Math.max(0, displayBox.x2 - displayBox.x1) : 0
   const boxH = displayBox ? Math.max(0, displayBox.y2 - displayBox.y1) : 0
-  const origW = box ? Math.abs(box.x2 - box.x1) : 0
-  const origH = box ? Math.abs(box.y2 - box.y1) : 0
+  const origW = box ? Math.round(Math.abs(box.x2 - box.x1)) : 0
+  const origH = box ? Math.round(Math.abs(box.y2 - box.y1)) : 0
 
   const getSvgPoint = useCallback((e: React.PointerEvent | PointerEvent) => {
     if (!svgRef.current) return { x: 0, y: 0 }

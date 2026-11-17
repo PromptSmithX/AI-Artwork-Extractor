@@ -32,4 +32,14 @@ describe('CandidateStrip', () => {
     fireEvent.keyDown(window, { key: 'ArrowRight' })
     expect(useAppStore.getState().selectedCandidateId).toBe(1)
   })
+
+  it('displays inference time and total wall time in header', () => {
+    const mockRes = createMockSegmentResult()
+    mockRes.metadata.elapsed_ms = 1300
+    useAppStore.setState({ result: mockRes })
+    render(<CandidateStrip />)
+
+    expect(screen.getByText(/Inference 1.3 s/i)).toBeInTheDocument()
+    expect(screen.getByText(/Tổng 1.3 s/i)).toBeInTheDocument()
+  })
 })

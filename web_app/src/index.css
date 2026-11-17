@@ -48,6 +48,10 @@ html, body, #root {
   box-shadow: var(--focus-ring);
 }
 
+.app-segmented-pill:focus-within {
+  box-shadow: 0 0 0 2px var(--accent-primary) !important;
+}
+
 /* Checkerboard pattern for alpha transparency preview */
 .checkerboard-pattern {
   background-color: var(--checker-light);

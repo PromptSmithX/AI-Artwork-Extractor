@@ -16,9 +16,26 @@ export const CandidateStrip: React.FC<CandidateStripProps> = ({
   style,
 }) => {
   const result = useAppStore((s) => s.result)
+  const segmentStartedAt = useAppStore((s) => s.segmentStartedAt)
   const selectedCandidateId = useAppStore((s) => s.selectedCandidateId)
   const selectCandidate = useAppStore((s) => s.selectCandidate)
   const scrollContainerRef = useRef<HTMLDivElement>(null)
+
+  const [totalWallTimeMs, setTotalWallTimeMs] = React.useState<number | null>(null)
+  const lastStartedAtRef = useRef<number | null>(null)
+
+  useEffect(() => {
+    if (segmentStartedAt) {
+      lastStartedAtRef.current = segmentStartedAt
+    }
+  }, [segmentStartedAt])
+
+  useEffect(() => {
+    if (result && lastStartedAtRef.current) {
+      setTotalWallTimeMs(Math.max(0, Date.now() - lastStartedAtRef.current))
+      lastStartedAtRef.current = null
+    }
+  }, [result])
 
   const candidates = result?.candidates || []
   const hasCandidates = candidates.length > 0
@@ -113,11 +130,27 @@ export const CandidateStrip: React.FC<CandidateStripProps> = ({
               ? `Hiển thị ${candidates.length}/${result.metadata.num_candidates_total} candidate tốt nhất`
               : candidates.length}
           </span>
-          {result.metadata.elapsed_ms > 0 && (
-            <span style={{ color: 'var(--text-muted)' }}>
-              ({(result.metadata.elapsed_ms / 1000).toFixed(2)}s)
+          <span
+            className="tabular-nums"
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '6px',
+              fontSize: '11px',
+              color: 'var(--text-muted)',
+              marginLeft: '4px',
+            }}
+          >
+            <span>Inference {(result.metadata.elapsed_ms / 1000).toFixed(1)} s</span>
+            <span>·</span>
+            <span>
+              Tổng{' '}
+              {totalWallTimeMs !== null
+                ? (totalWallTimeMs / 1000).toFixed(1)
+                : (result.metadata.elapsed_ms / 1000).toFixed(1)}{' '}
+              s
             </span>
-          )}
+          </span>
         </div>
 
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: 'var(--text-muted)' }}>

@@ -25,4 +25,12 @@ describe('SuggestionCard', () => {
     fireEvent.click(chip)
     expect(useAppStore.getState().prompt).toBe('square embroidered badge')
   })
+
+  it('shows kept prompt hint when current prompt differs from suggestion', () => {
+    useAppStore.setState({ prompt: 'my custom existing prompt' })
+    render(<SuggestionCard />)
+    expect(
+      screen.getByText('Prompt hiện tại được giữ nguyên — bấm ★ để dùng gợi ý'),
+    ).toBeInTheDocument()
+  })
 })
