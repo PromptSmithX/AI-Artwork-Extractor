@@ -70,6 +70,7 @@ def create_app(
     default_threshold: float = 0.35,
     max_candidates: int = 12,
     cors_origins: Optional[list[str]] = None,
+    overlay_max_side: int = 768,
 ) -> FastAPI:
     """Create and configure the FastAPI application."""
     if not api_token or not api_token.strip() or len(api_token.strip()) < 16:
@@ -198,11 +199,20 @@ def create_app(
         prompt: Optional[str] = Form(None),
         bbox: Optional[str] = Form(None),
         confidence_threshold: Optional[float] = Form(None),
+        export_profile: Optional[str] = Form("lean"),
         _: None = Depends(verify_auth),
     ) -> Response:
         """Run SAM 3 segmentation and return in-memory ZIP archive."""
         if sam_engine is None or not getattr(sam_engine, "loaded", False):
             raise HTTPException(status_code=503, detail="SAM 3 engine is not loaded")
+
+        # Validate export_profile
+        profile_clean = (export_profile or "lean").strip().lower()
+        if profile_clean not in ("lean", "full"):
+            raise HTTPException(
+                status_code=422,
+                detail=f"Invalid export_profile '{profile_clean}'. Allowed: ['full', 'lean']",
+            )
 
         # Validate mode
         valid_modes = {m.value for m in Mode}
@@ -298,15 +308,18 @@ def create_app(
                 threshold=threshold_val,
                 elapsed_ms=infer_ms,
                 max_candidates=max_candidates,
+                export_profile=profile_clean,
+                overlay_max_side=overlay_max_side,
             )
             export_ms = max(0, int((time.perf_counter() - t_export_start) * 1000))
             zip_bytes_len = len(zip_bytes)
 
-            # Safe logging: mode, prompt, infer_ms, export_ms, zip_bytes, num_candidates_total (never images/tokens)
+            # Safe logging: mode, prompt, profile, infer_ms, export_ms, zip_bytes, num_candidates_total (never images/tokens)
             logger.info(
-                "segment finished: mode=%s prompt=%r infer_ms=%d export_ms=%d zip_bytes=%d num_candidates_total=%d",
+                "segment finished: mode=%s prompt=%r profile=%s infer_ms=%d export_ms=%d zip_bytes=%d num_candidates_total=%d",
                 mode_enum.value,
                 clean_prompt,
+                profile_clean,
                 infer_ms,
                 export_ms,
                 zip_bytes_len,

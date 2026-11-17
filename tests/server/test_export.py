@@ -104,6 +104,7 @@ def test_export_cutout_rgb_and_alpha():
         bbox_input=None,
         threshold=0.35,
         elapsed_ms=50,
+        export_profile="full",
     )
 
     with zipfile.ZipFile(io.BytesIO(zip_bytes), "r") as zf:
@@ -149,6 +150,7 @@ def test_export_rgba_input_alpha_preserved():
         bbox_input=[0.2, 0.25, 0.2, 0.25],
         threshold=0.35,
         elapsed_ms=42,
+        export_profile="full",
     )
 
     with zipfile.ZipFile(io.BytesIO(zip_bytes), "r") as zf:
@@ -219,6 +221,7 @@ def test_export_empty_mask_no_crop_file():
         bbox_input=None,
         threshold=0.35,
         elapsed_ms=10,
+        export_profile="full",
     )
 
     with zipfile.ZipFile(io.BytesIO(zip_bytes), "r") as zf:
@@ -257,6 +260,7 @@ def test_export_zip_layout_and_metadata_validation():
         bbox_input=[0.5, 0.5, 0.4, 0.4],
         threshold=0.35,
         elapsed_ms=120,
+        export_profile="full",
     )
 
     with zipfile.ZipFile(io.BytesIO(zip_bytes), "r") as zf:
@@ -385,4 +389,138 @@ def test_export_max_candidates_cap_and_num_candidates_total():
         assert meta_5.num_candidates == 5
         assert meta_5.num_candidates_total == 16
         assert len(meta_5.candidates) == 5
+
+
+def test_export_lean_profile_default_and_crop_box():
+    """Verify default export_profile is 'lean': no cutout file, crop_box_xyxy_px populated, overlay downscaled."""
+    img = _create_test_image("RGB", size=(120, 90))
+    mask = np.zeros((1, 90, 120), dtype=bool)
+    mask[0, 20:40, 30:60] = True  # y: 20..39, x: 30..59
+
+    seg_res = SegResult(
+        masks=mask,
+        boxes_xyxy=np.array([[30.0, 20.0, 60.0, 40.0]], dtype=np.float32),
+        scores=np.array([0.92], dtype=np.float32),
+    )
+
+    zip_bytes = build_result_zip(
+        img,
+        seg_res,
+        prompt="lean test",
+        mode=Mode.TEXT,
+        bbox_input=None,
+        threshold=0.35,
+        elapsed_ms=30,
+        crop_padding_px=10,
+    )
+
+    with zipfile.ZipFile(io.BytesIO(zip_bytes), "r") as zf:
+        names = set(zf.namelist())
+        assert "result/metadata.json" in names
+        assert "result/candidate_00_mask.png" in names
+        assert "result/candidate_00_overlay.png" in names
+        assert "result/candidate_00_cutout_crop.png" in names
+        assert "result/candidate_00_cutout.png" not in names  # OMITTED in lean profile
+
+        meta = SegmentMetadata.model_validate_json(zf.read("result/metadata.json"))
+        assert meta.export_profile == "lean"
+        assert meta.overlay_max_side == 768
+        assert meta.num_candidates == 1
+
+        cand = meta.candidates[0]
+        assert "cutout" not in cand.files
+        assert cand.files["mask"] == "candidate_00_mask.png"
+        assert cand.files["overlay"] == "candidate_00_overlay.png"
+        assert cand.files["cutout_crop"] == "candidate_00_cutout_crop.png"
+
+        # crop_box_xyxy_px: x0 = max(0, 30-10)=20, x1 = min(120, 59+10+1)=70
+        #                   y0 = max(0, 20-10)=10, y1 = min(90, 39+10+1)=50
+        assert cand.crop_box_xyxy_px == [20, 10, 70, 50]
+
+        # Verify crop image dimensions match crop_box
+        crop_img = Image.open(io.BytesIO(zf.read("result/candidate_00_cutout_crop.png")))
+        assert crop_img.size == (70 - 20, 50 - 10)  # (w=50, h=40)
+
+
+def test_export_lean_overlay_downscaling_large_image():
+    """Verify overlay preview is downscaled so max side <= overlay_max_side (768)."""
+    large_img = _create_test_image("RGB", size=(2000, 1500))
+    mask = np.zeros((1, 1500, 2000), dtype=bool)
+    mask[0, 500:800, 600:1000] = True
+
+    seg_res = SegResult(
+        masks=mask,
+        boxes_xyxy=np.array([[600.0, 500.0, 1000.0, 800.0]], dtype=np.float32),
+        scores=np.array([0.90], dtype=np.float32),
+    )
+
+    zip_bytes = build_result_zip(
+        large_img,
+        seg_res,
+        prompt="large image lean",
+        mode=Mode.TEXT,
+        bbox_input=None,
+        threshold=0.35,
+        elapsed_ms=50,
+        export_profile="lean",
+        overlay_max_side=768,
+    )
+
+    with zipfile.ZipFile(io.BytesIO(zip_bytes), "r") as zf:
+        overlay_img = Image.open(io.BytesIO(zf.read("result/candidate_00_overlay.png")))
+        # Max side must be <= 768
+        assert max(overlay_img.size) <= 768
+        # Mask is still full resolution
+        mask_img = Image.open(io.BytesIO(zf.read("result/candidate_00_mask.png")))
+        assert mask_img.size == (2000, 1500)
+
+
+def test_export_empty_mask_crop_box_is_none():
+    """When a candidate has an empty mask, crop_box_xyxy_px is None and no cutout_crop file."""
+    img = _create_test_image("RGB", size=(100, 80))
+    mask = np.zeros((1, 80, 100), dtype=bool)
+
+    seg_res = SegResult(
+        masks=mask,
+        boxes_xyxy=np.array([[0.0, 0.0, 0.0, 0.0]], dtype=np.float32),
+        scores=np.array([0.40], dtype=np.float32),
+    )
+
+    zip_bytes = build_result_zip(
+        img,
+        seg_res,
+        prompt="empty mask test",
+        mode=Mode.TEXT,
+        bbox_input=None,
+        threshold=0.35,
+        elapsed_ms=10,
+        export_profile="lean",
+    )
+
+    with zipfile.ZipFile(io.BytesIO(zip_bytes), "r") as zf:
+        meta = SegmentMetadata.model_validate_json(zf.read("result/metadata.json"))
+        assert meta.candidates[0].crop_box_xyxy_px is None
+        assert "cutout_crop" not in meta.candidates[0].files
+
+
+def test_export_invalid_profile_raises_value_error():
+    """Invalid export_profile raises ValueError."""
+    img = _create_test_image("RGB", size=(100, 80))
+    seg_res = SegResult(
+        masks=np.zeros((0, 80, 100), dtype=bool),
+        boxes_xyxy=np.zeros((0, 4), dtype=np.float32),
+        scores=np.zeros((0,), dtype=np.float32),
+    )
+    with pytest.raises(ValueError, match="Invalid export_profile"):
+        build_result_zip(
+            img,
+            seg_res,
+            prompt="bad profile",
+            mode=Mode.TEXT,
+            bbox_input=None,
+            threshold=0.35,
+            elapsed_ms=10,
+            export_profile="ultra",
+        )
+
 

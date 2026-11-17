@@ -134,6 +134,7 @@ def generate_notebook(repo_root: Optional[Path] = None) -> Dict[str, Any]:
             "MAX_UPLOAD_MB = 20               # Giới hạn dung lượng file ảnh upload (MB)\n"
             "DEFAULT_THRESHOLD = 0.35         # Ngưỡng confidence threshold mặc định cho SAM 3\n"
             "MAX_CANDIDATES = 12              # Số lượng candidate tối đa xuất ra trong file ZIP\n"
+            "OVERLAY_MAX_SIDE = 768           # Kích thước cạnh tối đa của overlay preview (lean profile)\n"
             "CORS_ORIGINS = [\"http://localhost:5173\", \"http://127.0.0.1:5173\"]  # Origins cho phép kết nối Web UI\n"
             "SAM_DEVICE = \"cuda\"              # Thiết bị chạy SAM 3 (\"cuda\" hoặc \"cpu\")\n"
             "\n"
@@ -144,6 +145,7 @@ def generate_notebook(repo_root: Optional[Path] = None) -> Dict[str, Any]:
             "print(f\"  MAX_UPLOAD_MB         : {MAX_UPLOAD_MB} MB\")\n"
             "print(f\"  DEFAULT_THRESHOLD     : {DEFAULT_THRESHOLD}\")\n"
             "print(f\"  MAX_CANDIDATES        : {MAX_CANDIDATES}\")\n"
+            "print(f\"  OVERLAY_MAX_SIDE      : {OVERLAY_MAX_SIDE}\")\n"
             "print(f\"  CORS_ORIGINS          : {CORS_ORIGINS}\")\n"
             "print(f\"  SAM_DEVICE            : {SAM_DEVICE}\")\n",
             next_id("code_config"),
@@ -580,6 +582,7 @@ def generate_notebook(repo_root: Optional[Path] = None) -> Dict[str, Any]:
             "    default_threshold=DEFAULT_THRESHOLD,\n"
             "    max_candidates=MAX_CANDIDATES,\n"
             "    cors_origins=CORS_ORIGINS,\n"
+            "    overlay_max_side=OVERLAY_MAX_SIDE,\n"
             ")\n"
             "\n"
             "print(\"Starting Uvicorn server in background thread via server_main.start_uvicorn...\")\n"

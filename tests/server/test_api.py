@@ -604,3 +604,66 @@ def test_create_app_custom_cors_origins(fake_sam: FakeSam3Engine, fake_assistant
     )
     assert resp_default.headers.get("access-control-allow-origin") is None
 
+
+def test_segment_export_profile_lean_default(client: TestClient):
+    """POST /api/v1/segment defaults to lean profile: no cutout.png, crop_box_xyxy_px populated."""
+    img_bytes = _make_image_bytes("PNG", size=(64, 64))
+    headers = {"Authorization": f"Bearer {TEST_TOKEN}"}
+    resp = client.post(
+        "/api/v1/segment",
+        headers=headers,
+        data={"mode": "text", "prompt": "patch"},
+        files={"image": ("test.png", img_bytes, "image/png")},
+    )
+    assert resp.status_code == 200
+    with zipfile.ZipFile(io.BytesIO(resp.content), "r") as zf:
+        names = set(zf.namelist())
+        assert "result/metadata.json" in names
+        assert "result/candidate_00_mask.png" in names
+        assert "result/candidate_00_overlay.png" in names
+        assert "result/candidate_00_cutout_crop.png" in names
+        assert "result/candidate_00_cutout.png" not in names  # Omitted in lean profile
+
+        meta = SegmentMetadata.model_validate_json(zf.read("result/metadata.json"))
+        assert meta.export_profile == "lean"
+        assert meta.overlay_max_side == 768
+        assert meta.candidates[0].crop_box_xyxy_px is not None
+        assert len(meta.candidates[0].crop_box_xyxy_px) == 4
+        assert "cutout" not in meta.candidates[0].files
+
+
+def test_segment_export_profile_full(client: TestClient):
+    """POST /api/v1/segment with export_profile=full includes candidate_XX_cutout.png."""
+    img_bytes = _make_image_bytes("PNG", size=(64, 64))
+    headers = {"Authorization": f"Bearer {TEST_TOKEN}"}
+    resp = client.post(
+        "/api/v1/segment",
+        headers=headers,
+        data={"mode": "text", "prompt": "patch", "export_profile": "full"},
+        files={"image": ("test.png", img_bytes, "image/png")},
+    )
+    assert resp.status_code == 200
+    with zipfile.ZipFile(io.BytesIO(resp.content), "r") as zf:
+        names = set(zf.namelist())
+        assert "result/candidate_00_cutout.png" in names
+        assert "result/candidate_00_cutout_crop.png" in names
+        meta = SegmentMetadata.model_validate_json(zf.read("result/metadata.json"))
+        assert meta.export_profile == "full"
+        assert meta.overlay_max_side is None
+        assert "cutout" in meta.candidates[0].files
+
+
+def test_segment_invalid_export_profile_returns_422(client: TestClient):
+    """Invalid export_profile returns 422 Unprocessable Entity."""
+    img_bytes = _make_image_bytes("PNG", size=(64, 64))
+    headers = {"Authorization": f"Bearer {TEST_TOKEN}"}
+    resp = client.post(
+        "/api/v1/segment",
+        headers=headers,
+        data={"mode": "text", "prompt": "patch", "export_profile": "unsupported_profile"},
+        files={"image": ("test.png", img_bytes, "image/png")},
+    )
+    assert resp.status_code == 422
+    assert "Invalid export_profile" in resp.json()["detail"]
+
+

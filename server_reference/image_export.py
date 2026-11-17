@@ -77,13 +77,21 @@ def build_result_zip(
     elapsed_ms: int,
     crop_padding_px: int = 12,
     max_candidates: int = 12,
+    export_profile: str = "lean",
+    overlay_max_side: int = 768,
 ) -> bytes:
     """Export segmentation results into an in-memory ZIP package per contract §2.
 
     Returns the raw ZIP bytes without creating any temporary files on disk.
-    Fast export: ZIP_STORED, PNG compress_level=1, top max_candidates cut,
-    and array buffers reused across candidates.
+    Supports export profiles:
+      - 'lean' (default): mask, cutout_crop, downscaled overlay (max side <= overlay_max_side),
+        and NO full-canvas cutout.
+      - 'full': original behavior with full-canvas cutout and full-res overlay.
     """
+    profile = (export_profile or "lean").strip().lower()
+    if profile not in ("lean", "full"):
+        raise ValueError(f"Invalid export_profile '{export_profile}'. Allowed: ['full', 'lean']")
+
     w, h = image.width, image.height
     masks = normalize_masks(result.masks, (w, h))
     num_candidates_total = masks.shape[0]
@@ -117,14 +125,22 @@ def build_result_zip(
 
     orig_alpha = source_rgba[:, :, 3].astype(np.uint16)
     has_orig_transparency = bool((orig_alpha < 255).any())
-
-    # Pre-allocate reusable cutout array (RGB channels stay identical to source_rgba)
-    cutout_arr = source_rgba.copy()
-
-    # Pre-allocate reusable RGB overlay array
     base_rgb = source_rgba[:, :, :3]
-    overlay_arr = base_rgb.copy()
     tint = np.array([255, 40, 170], dtype=np.uint16)
+
+    # In lean profile, pre-downscale base RGB image for overlay review previews
+    max_dim = max(w, h)
+    if profile == "lean" and overlay_max_side and max_dim > overlay_max_side:
+        scale = overlay_max_side / float(max_dim)
+        dw = max(1, int(round(w * scale)))
+        dh = max(1, int(round(h * scale)))
+        base_pil = Image.fromarray(base_rgb, mode="RGB")
+        downscaled_base_rgb = np.array(
+            base_pil.resize((dw, dh), resample=Image.Resampling.BILINEAR)
+        )
+    else:
+        dw, dh = w, h
+        downscaled_base_rgb = None
 
     candidates_meta: List[CandidateMeta] = []
     zip_buffer = io.BytesIO()
@@ -142,45 +158,73 @@ def build_result_zip(
             mask_pil.save(mask_bytes, format="PNG", compress_level=1)
             zf.writestr(f"result/{mask_filename}", mask_bytes.getvalue())
 
-            # 2. Cutout PNG (RGBA, preserving original RGB and multiplying alpha)
-            if has_orig_transparency:
-                cutout_arr[:, :, 3] = ((orig_alpha * mask_u8.astype(np.uint16)) // 255).astype(np.uint8)
-            else:
-                cutout_arr[:, :, 3] = mask_u8
-
-            cutout_filename = f"candidate_{new_id:02d}_cutout.png"
-            cutout_pil = Image.fromarray(cutout_arr, mode="RGBA")
-            cutout_bytes = io.BytesIO()
-            cutout_pil.save(cutout_bytes, format="PNG", compress_level=1)
-            zf.writestr(f"result/{cutout_filename}", cutout_bytes.getvalue())
-
-            # 3. Overlay PNG (RGB, colored mask composite for review)
-            overlay_arr[mask] = (
-                (base_rgb[mask].astype(np.uint16) * 145 + tint * 110 + 127) // 255
-            ).astype(np.uint8)
-            overlay_filename = f"candidate_{new_id:02d}_overlay.png"
-            overlay_pil = Image.fromarray(overlay_arr, mode="RGB")
-            overlay_bytes = io.BytesIO()
-            overlay_pil.save(overlay_bytes, format="PNG", compress_level=1)
-            zf.writestr(f"result/{overlay_filename}", overlay_bytes.getvalue())
-            overlay_arr[mask] = base_rgb[mask]
-
-            # 4. Cutout Crop (clamped to image; absent if mask is empty)
+            # 2. Cutout Crop (clamped to image; absent if mask is empty)
             ys, xs = np.where(mask)
             has_crop = len(xs) > 0
             crop_filename: Optional[str] = None
+            crop_box_xyxy_px: Optional[List[int]] = None
             if has_crop:
                 x0 = max(0, int(xs.min()) - crop_padding_px)
                 x1 = min(w, int(xs.max()) + crop_padding_px + 1)
                 y0 = max(0, int(ys.min()) - crop_padding_px)
                 y1 = min(h, int(ys.max()) + crop_padding_px + 1)
+                crop_box_xyxy_px = [x0, y0, x1, y1]
 
-                crop_arr = cutout_arr[y0:y1, x0:x1]
-                crop_pil = Image.fromarray(crop_arr, mode="RGBA")
+                crop_rgba = source_rgba[y0:y1, x0:x1].copy()
+                mask_crop = mask_u8[y0:y1, x0:x1]
+                if has_orig_transparency:
+                    crop_rgba[:, :, 3] = (
+                        (crop_rgba[:, :, 3].astype(np.uint16) * mask_crop.astype(np.uint16)) // 255
+                    ).astype(np.uint8)
+                else:
+                    crop_rgba[:, :, 3] = mask_crop
+
+                crop_pil = Image.fromarray(crop_rgba, mode="RGBA")
                 crop_filename = f"candidate_{new_id:02d}_cutout_crop.png"
                 crop_bytes = io.BytesIO()
                 crop_pil.save(crop_bytes, format="PNG", compress_level=1)
                 zf.writestr(f"result/{crop_filename}", crop_bytes.getvalue())
+
+            # 3. Overlay PNG (RGB colored mask review preview)
+            overlay_filename = f"candidate_{new_id:02d}_overlay.png"
+            overlay_bytes = io.BytesIO()
+            if downscaled_base_rgb is not None:
+                # Lean profile: compute on downscaled image
+                d_mask = np.array(
+                    mask_pil.resize((dw, dh), resample=Image.Resampling.NEAREST)
+                ) > 127
+                overlay_arr = downscaled_base_rgb.copy()
+                overlay_arr[d_mask] = (
+                    (downscaled_base_rgb[d_mask].astype(np.uint16) * 145 + tint * 110 + 127) // 255
+                ).astype(np.uint8)
+                overlay_pil = Image.fromarray(overlay_arr, mode="RGB")
+            else:
+                # Full profile or small image: full resolution overlay
+                overlay_arr = base_rgb.copy()
+                overlay_arr[mask] = (
+                    (base_rgb[mask].astype(np.uint16) * 145 + tint * 110 + 127) // 255
+                ).astype(np.uint8)
+                overlay_pil = Image.fromarray(overlay_arr, mode="RGB")
+
+            overlay_pil.save(overlay_bytes, format="PNG", compress_level=1)
+            zf.writestr(f"result/{overlay_filename}", overlay_bytes.getvalue())
+
+            # 4. Full Canvas Cutout (full profile ONLY)
+            cutout_filename: Optional[str] = None
+            if profile == "full":
+                cutout_arr = source_rgba.copy()
+                if has_orig_transparency:
+                    cutout_arr[:, :, 3] = (
+                        (orig_alpha * mask_u8.astype(np.uint16)) // 255
+                    ).astype(np.uint8)
+                else:
+                    cutout_arr[:, :, 3] = mask_u8
+
+                cutout_filename = f"candidate_{new_id:02d}_cutout.png"
+                cutout_pil = Image.fromarray(cutout_arr, mode="RGBA")
+                cutout_bytes = io.BytesIO()
+                cutout_pil.save(cutout_bytes, format="PNG", compress_level=1)
+                zf.writestr(f"result/{cutout_filename}", cutout_bytes.getvalue())
 
             # Candidate bbox
             if orig_idx < len(boxes) and len(boxes[orig_idx]) == 4:
@@ -193,8 +237,9 @@ def build_result_zip(
             files_dict = {
                 "mask": mask_filename,
                 "overlay": overlay_filename,
-                "cutout": cutout_filename,
             }
+            if cutout_filename is not None:
+                files_dict["cutout"] = cutout_filename
             if crop_filename is not None:
                 files_dict["cutout_crop"] = crop_filename
 
@@ -203,6 +248,7 @@ def build_result_zip(
                 score=score_val,
                 bbox_xyxy_px=bbox_xyxy,
                 mask_area_px=int(np.sum(mask)),
+                crop_box_xyxy_px=crop_box_xyxy_px,
                 files=files_dict,
             )
             candidates_meta.append(candidate_meta)
@@ -215,6 +261,8 @@ def build_result_zip(
             image_size=[w, h],
             confidence_threshold=threshold,
             crop_padding_px=crop_padding_px,
+            export_profile=profile,
+            overlay_max_side=overlay_max_side if profile == "lean" else None,
             elapsed_ms=elapsed_ms,
             num_candidates=len(candidates_meta),
             num_candidates_total=num_candidates_total,

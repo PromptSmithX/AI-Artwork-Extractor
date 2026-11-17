@@ -194,6 +194,7 @@ def test_single_config_cell_and_no_reassignments(notebook_data: Dict[str, Any]) 
         "MAX_UPLOAD_MB",
         "DEFAULT_THRESHOLD",
         "MAX_CANDIDATES",
+        "OVERLAY_MAX_SIDE",
         "CORS_ORIGINS",
         "SAM_DEVICE",
     ]
