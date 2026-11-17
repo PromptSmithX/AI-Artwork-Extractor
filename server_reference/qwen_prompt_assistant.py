@@ -51,6 +51,10 @@ Rules:
   not only the artwork inside it.
 - If the user asks for the inner artwork, describe only that inner
   artwork.
+- sam_prompt and alternative_prompts must ALWAYS be short English noun phrases
+  even when the request is in Vietnamese (e.g. "lấy bông hoa đỏ trên túi" ->
+  embroidered red poppy flowers), because SAM 3 only understands English.
+- target_description, reason, and clarification_question may be in Vietnamese.
 - Prefer short noun phrases, not long natural-language instructions.
 - Describe one concept per prompt.
 - Do not combine multiple object categories into one prompt.
@@ -165,16 +169,33 @@ def parse_suggestion(text: str) -> PromptSuggestion:
     else:
         data["scope"] = Scope.UNKNOWN
 
+    # Filter non-ASCII alternative prompts before schema validation
+    if isinstance(data.get("alternative_prompts"), list):
+        data["alternative_prompts"] = [
+            p for p in data["alternative_prompts"]
+            if isinstance(p, str) and p.isascii()
+        ]
+
     try:
         suggestion = PromptSuggestion.model_validate(data)
     except Exception as e:
         raise PromptAssistantOutputError(f"Schema validation error: {e}") from e
 
-    # Empty sam_prompt while needs_clarification is false -> invalid
-    if not suggestion.needs_clarification and not suggestion.sam_prompt:
-        raise PromptAssistantOutputError(
-            "sam_prompt cannot be empty when needs_clarification is False"
-        )
+    # Non-ASCII alternative prompts are dropped (if any remain)
+    suggestion.alternative_prompts = [
+        p for p in suggestion.alternative_prompts if p.isascii()
+    ]
+
+    # Empty or non-ASCII sam_prompt while needs_clarification is false -> invalid
+    if not suggestion.needs_clarification:
+        if not suggestion.sam_prompt:
+            raise PromptAssistantOutputError(
+                "sam_prompt cannot be empty when needs_clarification is False"
+            )
+        if not suggestion.sam_prompt.isascii():
+            raise PromptAssistantOutputError(
+                "sam_prompt and alternative_prompts must be in English"
+            )
 
     return suggestion
 
@@ -405,6 +426,7 @@ class QwenPromptAssistant:
         ]
 
         # First attempt
+        first_err: Optional[Exception] = None
         try:
             raw_text = self._generate(messages)
         except Exception as e:
@@ -417,10 +439,17 @@ class QwenPromptAssistant:
 
         try:
             return parse_suggestion(raw_text)
-        except PromptAssistantOutputError:
-            pass
+        except PromptAssistantOutputError as err:
+            first_err = err
 
         # Retry once: assistant turn with previous answer, user turn with schema reminder
+        retry_instruction = "Return valid JSON only, matching the schema."
+        if first_err and "English" in str(first_err):
+            retry_instruction = (
+                "sam_prompt and alternative_prompts must be in English. "
+                "Return valid JSON only, matching the schema."
+            )
+
         retry_messages = list(messages) + [
             {
                 "role": "assistant",
@@ -428,7 +457,7 @@ class QwenPromptAssistant:
             },
             {
                 "role": "user",
-                "content": [{"type": "text", "text": "Return valid JSON only, matching the schema."}],
+                "content": [{"type": "text", "text": retry_instruction}],
             },
         ]
 

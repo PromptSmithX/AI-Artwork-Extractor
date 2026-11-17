@@ -133,6 +133,8 @@ def generate_notebook(repo_root: Optional[Path] = None) -> Dict[str, Any]:
             "USE_DRIVE_CACHE = False          # Lưu checkpoint Hugging Face vào Google Drive\n"
             "MAX_UPLOAD_MB = 20               # Giới hạn dung lượng file ảnh upload (MB)\n"
             "DEFAULT_THRESHOLD = 0.35         # Ngưỡng confidence threshold mặc định cho SAM 3\n"
+            "MAX_CANDIDATES = 12              # Số lượng candidate tối đa xuất ra trong file ZIP\n"
+            "CORS_ORIGINS = [\"http://localhost:5173\", \"http://127.0.0.1:5173\"]  # Origins cho phép kết nối Web UI\n"
             "SAM_DEVICE = \"cuda\"              # Thiết bị chạy SAM 3 (\"cuda\" hoặc \"cpu\")\n"
             "\n"
             "print(\"Cấu hình runtime đã được thiết lập:\")\n"
@@ -141,6 +143,8 @@ def generate_notebook(repo_root: Optional[Path] = None) -> Dict[str, Any]:
             "print(f\"  USE_DRIVE_CACHE       : {USE_DRIVE_CACHE}\")\n"
             "print(f\"  MAX_UPLOAD_MB         : {MAX_UPLOAD_MB} MB\")\n"
             "print(f\"  DEFAULT_THRESHOLD     : {DEFAULT_THRESHOLD}\")\n"
+            "print(f\"  MAX_CANDIDATES        : {MAX_CANDIDATES}\")\n"
+            "print(f\"  CORS_ORIGINS          : {CORS_ORIGINS}\")\n"
             "print(f\"  SAM_DEVICE            : {SAM_DEVICE}\")\n",
             next_id("code_config"),
         )
@@ -574,6 +578,8 @@ def generate_notebook(repo_root: Optional[Path] = None) -> Dict[str, Any]:
             "    api_token=API_TOKEN,\n"
             "    max_upload_mb=MAX_UPLOAD_MB,\n"
             "    default_threshold=DEFAULT_THRESHOLD,\n"
+            "    max_candidates=MAX_CANDIDATES,\n"
+            "    cors_origins=CORS_ORIGINS,\n"
             ")\n"
             "\n"
             "print(\"Starting Uvicorn server in background thread via server_main.start_uvicorn...\")\n"
@@ -707,7 +713,9 @@ def generate_notebook(repo_root: Optional[Path] = None) -> Dict[str, Any]:
         _make_markdown_cell(
             "## 15. Dừng Server và Cloudflare Tunnel\n"
             "\n"
-            "Gọi `server_main.stop_server_and_tunnel(...)` khi muốn dừng server Uvicorn và đóng Cloudflare Tunnel.",
+            "CẢNH BÁO: Không tự động chạy cell này khi dùng 'Run all'! "
+            "Để tránh server bị dừng sau khi chạy toàn bộ notebook, cell này được bảo vệ bởi cờ `STOP_SERVER = False`. "
+            "Khi muốn dừng server Uvicorn và đóng Cloudflare Tunnel, đổi `STOP_SERVER = True` trong cell dưới đây rồi chạy lại cell này.",
             next_id("h_stop_server"),
         )
     )
@@ -715,25 +723,74 @@ def generate_notebook(repo_root: Optional[Path] = None) -> Dict[str, Any]:
         _make_code_cell(
             "import server_main\n"
             "\n"
-            "print(\"Shutting down server and tunnel via server_main.stop_server_and_tunnel...\")\n"
-            "server_main.stop_server_and_tunnel(\n"
-            "    server=globals().get(\"server\"),\n"
-            "    tunnel_proc=globals().get(\"tunnel_proc\"),\n"
-            "    thread=globals().get(\"server_thread\"),\n"
-            ")\n"
-            "print(\"Shutdown complete.\")\n",
+            "STOP_SERVER = False  # đổi thành True rồi chạy cell này để dừng\n"
+            "\n"
+            "if STOP_SERVER:\n"
+            "    print(\"Shutting down server and tunnel via server_main.stop_server_and_tunnel...\")\n"
+            "    server_main.stop_server_and_tunnel(\n"
+            "        server=globals().get(\"server\"),\n"
+            "        tunnel_proc=globals().get(\"tunnel_proc\"),\n"
+            "        thread=globals().get(\"server_thread\"),\n"
+            "    )\n"
+            "    print(\"Shutdown complete.\")\n"
+            "else:\n"
+            "    print(\"Bỏ qua dừng server (STOP_SERVER = False). Server vẫn đang chạy bình thường.\")\n"
+            "    print(\"Khi muốn dừng hẳn server, hãy sửa `STOP_SERVER = True` rồi chạy lại cell này.\")\n",
             next_id("code_stop_server"),
         )
     )
 
-    # 17. Troubleshooting Markdown
+    # 17. Server Status / Health Check (Final cell after Run all)
+    cells.append(
+        _make_markdown_cell(
+            "## 16. Trạng thái server\n"
+            "\n"
+            "Kiểm tra và xác nhận server vẫn đang hoạt động sau khi thực hiện Run all.",
+            next_id("h_server_status"),
+        )
+    )
+    cells.append(
+        _make_code_cell(
+            "import requests\n"
+            "\n"
+            "tunnel_url = globals().get(\"tunnel_url\")\n"
+            "print(\"=\" * 72)\n"
+            "print(\"  TRẠNG THÁI SERVER — INFERENCE SERVER ĐANG HOẠT ĐỘNG\")\n"
+            "print(\"=\" * 72)\n"
+            "print(f\"Public API Base URL: {tunnel_url}\")\n"
+            "\n"
+            "if tunnel_url:\n"
+            "    try:\n"
+            "        resp = requests.get(f\"{tunnel_url}/health\", timeout=10)\n"
+            "        print(f\"Health Check (Status {resp.status_code}):\")\n"
+            "        print(f\"  {resp.json()}\")\n"
+            "    except Exception as e:\n"
+            "        print(f\"Health Check Error: {e}\")\n"
+            "else:\n"
+            "    print(\"Chưa có tunnel_url. Hãy kiểm tra các cell khởi chạy phía trên.\")\n"
+            "print(\"=\" * 72)\n",
+            next_id("code_server_status"),
+        )
+    )
+
+    # 18. Troubleshooting Markdown
     cells.append(
         _make_markdown_cell(
             "## Hướng dẫn xử lý sự cố (Troubleshooting)\n"
             "\n"
             "- **Tunnel URL thay đổi khi khởi động lại**:\n"
             "  Cloudflare Quick Tunnel tự động cấp một URL `https://*.trycloudflare.com` ngẫu nhiên mỗi khi tiến trình chạy lại. "
-            "  Khi restart tunnel, bạn cần copy URL mới vào `local_app/.env` hoặc cập nhật trực tiếp tại thanh sidebar của local Streamlit UI.\n"
+            "  Khi restart tunnel, bạn cần copy URL mới vào `local_app/.env` hoặc cập nhật trực tiếp tại giao diện Web UI.\n"
+            "\n"
+            "- **Quick Tunnel aborts responses > 100s (Quá thời gian chờ phản hồi)**:\n"
+            "  Cloudflare Quick Tunnel tự động ngắt kết nối với các response kéo dài hơn ~100 giây. "
+            "  Đối với hình ảnh rất lớn (ví dụ 2000×1805 trở lên), hãy giảm `MAX_CANDIDATES` ở Mục 1b (mặc định 12) "
+            "  hoặc sử dụng chế độ Box / Text+Box mode để khoanh vùng thay vì để SAM tìm kiếm trên toàn bộ ảnh.\n"
+            "\n"
+            "- **Prompt phải là tiếng Anh (English)**:\n"
+            "  Mô hình Meta SAM 3 chỉ hiểu tiếng Anh (các ký tự ASCII). Vì vậy `sam_prompt` trong request phải luôn là "
+            "  cụm danh từ tiếng Anh (ví dụ 'embroidered red poppy flowers' thay vì 'bông hoa đỏ'). Qwen Prompt Assistant "
+            "  sẽ tự động chuyển đổi yêu cầu tiếng Việt của designer sang tiếng Anh.\n"
             "\n"
             "- **`ModuleNotFoundError: No module named 'sam3.model_builder'`**:\n"
             "  Xảy ra nếu repo SAM 3 được clone vào `/content/sam3` (trùng tên package) bởi notebook phiên bản cũ. "
@@ -749,7 +806,7 @@ def generate_notebook(repo_root: Optional[Path] = None) -> Dict[str, Any]:
             "  Google Colab có thể ngắt kết nối khi session không có tương tác trong một thời gian dài.\n"
             "  - Kết nối lại GPU T4 runtime.\n"
             "  - Chạy lại các cell trong notebook.\n"
-            "  - Cập nhật URL và Token mới vào `local_app/.env`.\n"
+            "  - Cập nhật URL và Token mới vào ứng dụng UI.\n"
             "\n"
             "- **Lỗi xác thực 401 Unauthorized**:\n"
             "  Đảm bảo header `Authorization: Bearer <API_TOKEN>` được đính kèm trong mọi request. Token được in ra ở Mục 13.\n",

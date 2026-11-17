@@ -213,3 +213,49 @@ def test_empty_sam_prompt_rule():
     assert sug_clarify.needs_clarification is True
     assert sug_clarify.sam_prompt == ""
     assert sug_clarify.clarification_question == "Do you want the left patch or the right patch?"
+
+
+def test_vietnamese_sam_prompt_rejected_when_not_clarifying():
+    """Non-ASCII (e.g. Vietnamese) sam_prompt is rejected when needs_clarification is False."""
+    raw = """{
+        "target_description": "Bông hoa đỏ",
+        "scope": "inner_artwork",
+        "sam_prompt": "bông hoa thêu màu đỏ",
+        "needs_clarification": false
+    }"""
+    with pytest.raises(PromptAssistantOutputError, match="must be in English"):
+        parse_suggestion(raw)
+
+
+def test_vietnamese_alternatives_dropped():
+    """Non-ASCII alternatives are dropped, keeping only ASCII alternatives."""
+    raw = """{
+        "target_description": "Hoa thêu trên túi",
+        "scope": "inner_artwork",
+        "sam_prompt": "embroidered flower",
+        "alternative_prompts": ["hoa thêu", "red flower", "hoa đỏ thêu", "embroidered poppy"],
+        "needs_clarification": false
+    }"""
+    sug = parse_suggestion(raw)
+    assert sug.sam_prompt == "embroidered flower"
+    assert sug.alternative_prompts == ["red flower", "embroidered poppy"]
+
+
+def test_vietnamese_fields_allowed_with_english_sam_prompt():
+    """Vietnamese is allowed in target_description, reason, clarification_question."""
+    raw = """{
+        "target_description": "Miếng vá thêu hình hoa anh túc đỏ",
+        "scope": "entire_patch",
+        "sam_prompt": "embroidered red poppy patch",
+        "alternative_prompts": ["red poppy patch"],
+        "location_hint": "góc trên bên phải",
+        "needs_clarification": false,
+        "clarification_question": "",
+        "reason": "Yêu cầu tách toàn bộ miếng vá có hoa đỏ"
+    }"""
+    sug = parse_suggestion(raw)
+    assert sug.sam_prompt == "embroidered red poppy patch"
+    assert sug.target_description == "Miếng vá thêu hình hoa anh túc đỏ"
+    assert sug.location_hint == "góc trên bên phải"
+    assert sug.reason == "Yêu cầu tách toàn bộ miếng vá có hoa đỏ"
+

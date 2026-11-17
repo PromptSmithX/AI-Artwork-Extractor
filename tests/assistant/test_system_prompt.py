@@ -14,6 +14,10 @@ def test_system_prompt_verbatim():
     assert "Rules:" in SYSTEM_PROMPT
     assert "- Preserve the designer's intended extraction scope." in SYSTEM_PROMPT
     assert "- Distinguish entire_patch, inner_artwork, and individual_decoration." in SYSTEM_PROMPT
+    assert "sam_prompt and alternative_prompts must ALWAYS be short English noun phrases" in SYSTEM_PROMPT
+    assert 'lấy bông hoa đỏ trên túi' in SYSTEM_PROMPT
+    assert 'embroidered red poppy flowers' in SYSTEM_PROMPT
+    assert "target_description, reason, and clarification_question may be in Vietnamese." in SYSTEM_PROMPT
     assert "Return valid JSON only, using this schema:" in SYSTEM_PROMPT
     assert '"target_description": "short description"' in SYSTEM_PROMPT
     assert '"scope": "entire_patch | inner_artwork | individual_decoration | unknown"' in SYSTEM_PROMPT

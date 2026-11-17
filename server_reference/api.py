@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING, Any, Optional
 
 from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, Request, Response, UploadFile
 from fastapi.exceptions import RequestValidationError
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from PIL import Image, ImageOps
 
@@ -67,6 +68,8 @@ def create_app(
     api_token: str = "",
     max_upload_mb: int = 20,
     default_threshold: float = 0.35,
+    max_candidates: int = 12,
+    cors_origins: Optional[list[str]] = None,
 ) -> FastAPI:
     """Create and configure the FastAPI application."""
     if not api_token or not api_token.strip() or len(api_token.strip()) < 16:
@@ -76,6 +79,21 @@ def create_app(
     app = FastAPI(title="AI Artwork Extractor Colab Server")
     lock = threading.Lock()
     app.state.lock = lock
+
+    # Configure CORS for browser Web UI per contract §1
+    allowed_origins = (
+        list(cors_origins)
+        if cors_origins is not None
+        else ["http://localhost:5173", "http://127.0.0.1:5173"]
+    )
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=allowed_origins,
+        allow_credentials=False,
+        allow_methods=["GET", "POST", "OPTIONS"],
+        allow_headers=["Authorization", "Content-Type"],
+        expose_headers=["Content-Disposition"],
+    )
 
     @app.exception_handler(RequestValidationError)
     def validation_exception_handler(_: Request, exc: RequestValidationError) -> JSONResponse:
@@ -259,18 +277,18 @@ def create_app(
                 bbox_cxcywh_norm=parsed_bbox,
                 threshold=threshold_val,
             )
-            elapsed_ms = max(1, int((time.perf_counter() - t0) * 1000))
-            num_candidates = len(seg_result.scores) if hasattr(seg_result, "scores") else 0
-
-            # Safe logging: only prompt/mode/candidates/elapsed_ms
-            logger.info(
-                "segment finished: mode=%s prompt=%r candidates=%d elapsed_ms=%d",
-                mode_enum.value,
-                clean_prompt,
-                num_candidates,
-                elapsed_ms,
+            infer_ms = max(1, int((time.perf_counter() - t0) * 1000))
+            num_candidates_total = (
+                len(seg_result.scores)
+                if hasattr(seg_result, "scores") and hasattr(seg_result.scores, "__len__")
+                else (
+                    seg_result.masks.shape[0]
+                    if hasattr(seg_result, "masks") and hasattr(seg_result.masks, "shape")
+                    else 0
+                )
             )
 
+            t_export_start = time.perf_counter()
             zip_bytes = build_result_zip(
                 export_image,
                 seg_result,
@@ -278,7 +296,21 @@ def create_app(
                 mode=mode_enum,
                 bbox_input=parsed_bbox,
                 threshold=threshold_val,
-                elapsed_ms=elapsed_ms,
+                elapsed_ms=infer_ms,
+                max_candidates=max_candidates,
+            )
+            export_ms = max(0, int((time.perf_counter() - t_export_start) * 1000))
+            zip_bytes_len = len(zip_bytes)
+
+            # Safe logging: mode, prompt, infer_ms, export_ms, zip_bytes, num_candidates_total (never images/tokens)
+            logger.info(
+                "segment finished: mode=%s prompt=%r infer_ms=%d export_ms=%d zip_bytes=%d num_candidates_total=%d",
+                mode_enum.value,
+                clean_prompt,
+                infer_ms,
+                export_ms,
+                zip_bytes_len,
+                num_candidates_total,
             )
 
             return Response(

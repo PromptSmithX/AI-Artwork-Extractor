@@ -150,6 +150,80 @@ def test_suggest_double_failure_raises_output_error():
     assert asst.available is True  # Output error does NOT disable the assistant (unlike OOM)
 
 
+def test_suggest_vietnamese_sam_prompt_retry_then_english_accepted():
+    """Vietnamese sam_prompt on 1st turn triggers retry with English instruction, then English accepted."""
+    vn_json = """{
+        "target_description": "Bông hoa đỏ trên túi",
+        "scope": "inner_artwork",
+        "sam_prompt": "bông hoa đỏ trên túi",
+        "alternative_prompts": ["hoa đỏ"],
+        "needs_clarification": false
+    }"""
+    en_json = """{
+        "target_description": "Bông hoa đỏ trên túi",
+        "scope": "inner_artwork",
+        "sam_prompt": "embroidered red poppy flowers",
+        "alternative_prompts": ["red flower"],
+        "needs_clarification": false
+    }"""
+    asst = SubclassPromptAssistant(outputs=[vn_json, en_json])
+    img = Image.new("RGB", (100, 100), "red")
+
+    res = asst.suggest(img, "lấy bông hoa đỏ trên túi")
+
+    assert asst.call_count == 2
+    assert res.sam_prompt == "embroidered red poppy flowers"
+    assert res.alternative_prompts == ["red flower"]
+
+    # Verify retry prompt explicitly reminded that sam_prompt and alternative_prompts must be in English
+    retry_msgs = asst.received_messages[1]
+    assert len(retry_msgs) == 4
+    retry_user_text = retry_msgs[3]["content"][0]["text"]
+    assert "sam_prompt and alternative_prompts must be in English" in retry_user_text
+
+
+def test_suggest_vietnamese_sam_prompt_double_failure():
+    """Vietnamese sam_prompt on both turns raises PromptAssistantOutputError."""
+    vn_json_1 = """{
+        "target_description": "Bông hoa",
+        "scope": "inner_artwork",
+        "sam_prompt": "hoa thêu",
+        "needs_clarification": false
+    }"""
+    vn_json_2 = """{
+        "target_description": "Bông hoa",
+        "scope": "inner_artwork",
+        "sam_prompt": "bông hoa đỏ",
+        "needs_clarification": false
+    }"""
+    asst = SubclassPromptAssistant(outputs=[vn_json_1, vn_json_2])
+    img = Image.new("RGB", (100, 100), "red")
+
+    with pytest.raises(PromptAssistantOutputError, match="must be in English"):
+        asst.suggest(img, "Lấy hoa")
+
+    assert asst.call_count == 2
+    assert asst.available is True
+
+
+def test_suggest_vietnamese_alternatives_dropped():
+    """Vietnamese alternatives are dropped while English sam_prompt and alternatives are kept."""
+    mixed_json = """{
+        "target_description": "Patch trên áo",
+        "scope": "entire_patch",
+        "sam_prompt": "embroidered badge",
+        "alternative_prompts": ["huy hiệu thêu", "cloth patch", "miếng vá"],
+        "needs_clarification": false
+    }"""
+    asst = SubclassPromptAssistant(outputs=[mixed_json])
+    img = Image.new("RGB", (100, 100), "blue")
+
+    res = asst.suggest(img, "Tách huy hiệu")
+    assert res.sam_prompt == "embroidered badge"
+    assert res.alternative_prompts == ["cloth patch"]
+
+
+
 def test_suggest_simulated_oom_first_call():
     """CUDA OOM on 1st generation unloads model, sets available=False, and raises PromptAssistantUnavailable."""
     oom_error = RuntimeError("CUDA out of memory. Tried to allocate 2.50 GiB")

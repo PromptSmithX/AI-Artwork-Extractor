@@ -521,3 +521,86 @@ def test_segment_value_error_mapped_to_422(fake_assistant: FakePromptAssistant):
     )
     assert resp.status_code == 422
     assert "Invalid prompt combination for segmentation" in resp.json()["detail"]
+
+
+def test_cors_preflight_options_allowed_origin(client: TestClient):
+    """Preflight OPTIONS request from allowed origin returns 200 without auth."""
+    headers = {
+        "Origin": "http://localhost:5173",
+        "Access-Control-Request-Method": "POST",
+        "Access-Control-Request-Headers": "Authorization, Content-Type",
+    }
+    resp = client.options("/api/v1/segment", headers=headers)
+    assert resp.status_code == 200
+    assert resp.headers.get("access-control-allow-origin") == "http://localhost:5173"
+    assert "POST" in resp.headers.get("access-control-allow-methods", "")
+    assert "Authorization" in resp.headers.get("access-control-allow-headers", "")
+
+
+def test_cors_preflight_options_disallowed_origin(client: TestClient):
+    """Preflight OPTIONS request from disallowed origin does not receive allow-origin header."""
+    headers = {
+        "Origin": "http://disallowed-site.com",
+        "Access-Control-Request-Method": "POST",
+    }
+    resp = client.options("/api/v1/segment", headers=headers)
+    assert resp.headers.get("access-control-allow-origin") is None
+
+
+def test_cors_post_auth_enforced_with_origin_header(client: TestClient):
+    """Auth is still strictly enforced on POST requests even with Origin header present."""
+    img_bytes = _make_image_bytes("PNG")
+    headers = {"Origin": "http://localhost:5173"}
+
+    # POST without Authorization -> 401
+    resp = client.post(
+        "/api/v1/segment",
+        headers=headers,
+        data={"mode": "text", "prompt": "patch"},
+        files={"image": ("cap.png", img_bytes, "image/png")},
+    )
+    assert resp.status_code == 401
+    assert resp.headers.get("access-control-allow-origin") == "http://localhost:5173"
+
+    # POST with Authorization -> 200 with Content-Disposition exposed
+    auth_headers = {
+        "Origin": "http://localhost:5173",
+        "Authorization": f"Bearer {TEST_TOKEN}",
+    }
+    resp_ok = client.post(
+        "/api/v1/segment",
+        headers=auth_headers,
+        data={"mode": "text", "prompt": "patch"},
+        files={"image": ("cap.png", img_bytes, "image/png")},
+    )
+    assert resp_ok.status_code == 200
+    assert resp_ok.headers.get("access-control-allow-origin") == "http://localhost:5173"
+    assert "Content-Disposition" in resp_ok.headers.get("access-control-expose-headers", "")
+
+
+def test_create_app_custom_cors_origins(fake_sam: FakeSam3Engine, fake_assistant: FakePromptAssistant):
+    """Custom cors_origins configure allowed origins correctly."""
+    custom_origin = "http://my-frontend.local:3000"
+    app = create_app(
+        sam_engine=fake_sam,
+        assistant=fake_assistant,
+        api_token=TEST_TOKEN,
+        cors_origins=[custom_origin],
+    )
+    custom_client = TestClient(app)
+
+    # Allowed custom origin
+    resp = custom_client.options(
+        "/api/v1/segment",
+        headers={"Origin": custom_origin, "Access-Control-Request-Method": "POST"},
+    )
+    assert resp.status_code == 200
+    assert resp.headers.get("access-control-allow-origin") == custom_origin
+
+    # Default localhost is NOT in custom origins
+    resp_default = custom_client.options(
+        "/api/v1/segment",
+        headers={"Origin": "http://localhost:5173", "Access-Control-Request-Method": "POST"},
+    )
+    assert resp_default.headers.get("access-control-allow-origin") is None
+

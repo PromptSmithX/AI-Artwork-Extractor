@@ -193,6 +193,8 @@ def test_single_config_cell_and_no_reassignments(notebook_data: Dict[str, Any]) 
         "USE_DRIVE_CACHE",
         "MAX_UPLOAD_MB",
         "DEFAULT_THRESHOLD",
+        "MAX_CANDIDATES",
+        "CORS_ORIGINS",
         "SAM_DEVICE",
     ]
 
@@ -344,3 +346,46 @@ def test_sam3_repo_not_shadowing_package(notebook_data: Dict[str, Any]) -> None:
     assert "sys.path.insert(0, repo_dir)" in install
     assert "import sam3.model_builder" in install
     assert 'sys.path.insert(0, "/content")' not in all_code
+
+
+def test_stop_cell_guarded_by_flag(notebook_data: Dict[str, Any]) -> None:
+    """Verify stop server cell is guarded by STOP_SERVER flag and does not call stop at top level."""
+    stop_cell = None
+    for cell in notebook_data["cells"]:
+        if cell.get("cell_type") == "code":
+            source = "".join(cell.get("source", []))
+            if "STOP_SERVER" in source:
+                stop_cell = source
+                break
+
+    assert stop_cell is not None, "Stop server cell with STOP_SERVER not found"
+    assert "STOP_SERVER = False" in stop_cell
+    assert "if STOP_SERVER:" in stop_cell
+
+    # AST check: stop_server_and_tunnel call must NOT be executed at module top-level
+    tree = ast.parse(stop_cell)
+    for stmt in tree.body:
+        if isinstance(stmt, ast.Expr) and isinstance(stmt.value, ast.Call):
+            func_name = ast.unparse(stmt.value.func)
+            assert "stop_server_and_tunnel" not in func_name, (
+                "stop_server_and_tunnel was called at top level in stop cell"
+            )
+
+    # Must be inside If block
+    if_stmts = [stmt for stmt in tree.body if isinstance(stmt, ast.If)]
+    assert len(if_stmts) > 0
+    if_body = ast.unparse(if_stmts[0])
+    assert "server_main.stop_server_and_tunnel" in if_body
+
+
+def test_final_server_status_cell(notebook_data: Dict[str, Any]) -> None:
+    """Verify final server status cell re-prints URL and checks health without revealing token."""
+    cells = notebook_data["cells"]
+    code_cells = [c for c in cells if c.get("cell_type") == "code"]
+    last_code_cell = "".join(code_cells[-1].get("source", []))
+
+    assert "TRẠNG THÁI SERVER" in last_code_cell
+    assert "tunnel_url" in last_code_cell
+    assert "/health" in last_code_cell
+    assert "API_TOKEN" not in last_code_cell
+
