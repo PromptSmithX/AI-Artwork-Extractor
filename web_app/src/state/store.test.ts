@@ -1,8 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ApiError } from '../core/api/errors'
+import { setCanvasFactory, setImageBitmapLoader } from '../core/export/fullCutout'
 import { setApiClientFactory, setImageDimensionReader, useAppStore } from './store'
 import type { ApiClient } from '../core/api/client'
-import type { HealthResponse, PromptSuggestion, SegmentResult } from '../core/types'
+import type { CandidateAssets, HealthResponse, PromptSuggestion, SegmentResult } from '../core/types'
 
 describe('useAppStore', () => {
   let mockApiClient: Partial<ApiClient>
@@ -434,6 +435,135 @@ describe('useAppStore', () => {
       expect(useAppStore.getState().selectedCandidateId).toBe(1)
       useAppStore.getState().selectCandidate(null)
       expect(useAppStore.getState().selectedCandidateId).toBeNull()
+    })
+  })
+
+  describe('getFullCutoutBlob', () => {
+    it('returns null if there is no segment result or candidate not found', async () => {
+      expect(await useAppStore.getState().getFullCutoutBlob(0)).toBeNull()
+
+      useAppStore.setState({
+        result: {
+          metadata: {
+            prompt: 'test',
+            mode: 'text',
+            bbox_input: null,
+            image_size: [100, 100],
+            confidence_threshold: 0.35,
+            crop_padding_px: 12,
+            elapsed_ms: 10,
+            num_candidates: 0,
+            candidates: [],
+          },
+          candidates: [],
+          zipBlob: new Blob(),
+          dispose: vi.fn(),
+        },
+      })
+      expect(await useAppStore.getState().getFullCutoutBlob(99)).toBeNull()
+    })
+
+    it('returns candidate.blobs.cutout immediately if already present (full profile)', async () => {
+      const existingCutout = new Blob(['full-cutout'], { type: 'image/png' })
+      const candidate: CandidateAssets = {
+        meta: {
+          id: 0,
+          score: 0.9,
+          bbox_xyxy_px: [10, 10, 50, 50],
+          mask_area_px: 1000,
+          files: { cutout: 'candidate_00_cutout.png' },
+        },
+        urls: {},
+        blobs: { cutout: existingCutout },
+      }
+
+      useAppStore.setState({
+        result: {
+          metadata: {
+            prompt: 'test',
+            mode: 'text',
+            bbox_input: null,
+            image_size: [1000, 800],
+            confidence_threshold: 0.35,
+            crop_padding_px: 12,
+            elapsed_ms: 10,
+            num_candidates: 1,
+            candidates: [candidate.meta],
+          },
+          candidates: [candidate],
+          zipBlob: new Blob(),
+          dispose: vi.fn(),
+        },
+      })
+
+      const blob = await useAppStore.getState().getFullCutoutBlob(0)
+      expect(blob).toBe(existingCutout)
+    })
+
+    it('composes full cutout from cropBlob + cropBox when cutout is absent (lean profile), caches and disposes URL', async () => {
+      const cropBlob = new Blob(['crop-bytes'], { type: 'image/png' })
+      const composedBlob = new Blob(['composed-bytes'], { type: 'image/png' })
+      const revokeSpy = vi.spyOn(URL, 'revokeObjectURL')
+      vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:composed-url')
+
+      const mockCanvas = {
+        width: 1000,
+        height: 800,
+        getContext: vi.fn().mockReturnValue({ drawImage: vi.fn() }),
+        convertToBlob: vi.fn().mockResolvedValue(composedBlob),
+      }
+      setCanvasFactory(() => mockCanvas as any)
+      setImageBitmapLoader(vi.fn().mockResolvedValue({ close: vi.fn() }))
+
+      const candidate: CandidateAssets = {
+        meta: {
+          id: 0,
+          score: 0.9,
+          bbox_xyxy_px: [100, 100, 400, 400],
+          crop_box_xyxy_px: [88, 88, 412, 412],
+          mask_area_px: 5000,
+          files: { cutout_crop: 'candidate_00_cutout_crop.png' },
+        },
+        urls: {},
+        blobs: { cutout_crop: cropBlob },
+      }
+
+      const origDispose = vi.fn()
+      const resultObj = {
+        metadata: {
+          prompt: 'test',
+          mode: 'text' as const,
+          bbox_input: null,
+          image_size: [1000, 800] as [number, number],
+          confidence_threshold: 0.35,
+          crop_padding_px: 12,
+          export_profile: 'lean' as const,
+          elapsed_ms: 10,
+          num_candidates: 1,
+          candidates: [candidate.meta],
+        },
+        candidates: [candidate],
+        zipBlob: new Blob(),
+        dispose: origDispose,
+      }
+
+      useAppStore.setState({ result: resultObj })
+
+      // First call composes
+      const blob1 = await useAppStore.getState().getFullCutoutBlob(0)
+      expect(blob1).toBe(composedBlob)
+      expect(candidate.blobs.cutout).toBe(composedBlob)
+      expect(candidate.urls.cutout).toBe('blob:composed-url')
+
+      // Second call returns cached without recomposing
+      const blob2 = await useAppStore.getState().getFullCutoutBlob(0)
+      expect(blob2).toBe(composedBlob)
+      expect(mockCanvas.convertToBlob).toHaveBeenCalledTimes(1)
+
+      // Disposing result revokes the composed cutout URL
+      resultObj.dispose()
+      expect(revokeSpy).toHaveBeenCalledWith('blob:composed-url')
+      expect(origDispose).toHaveBeenCalledTimes(1)
     })
   })
 })
