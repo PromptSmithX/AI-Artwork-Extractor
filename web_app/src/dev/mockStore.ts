@@ -101,6 +101,7 @@ export function createMockCandidates(): CandidateAssets[] {
         id: 0,
         score: 0.942,
         bbox_xyxy_px: [360, 220, 840, 680],
+        crop_box_xyxy_px: [348, 208, 852, 692],
         mask_area_px: 220800,
         files: {
           mask: 'candidate_00_mask.png',
@@ -127,18 +128,17 @@ export function createMockCandidates(): CandidateAssets[] {
         id: 1,
         score: 0.865,
         bbox_xyxy_px: [480, 310, 720, 560],
+        crop_box_xyxy_px: [468, 298, 732, 572],
         mask_area_px: 75400,
         files: {
           mask: 'candidate_01_mask.png',
           overlay: 'candidate_01_overlay.png',
-          cutout: 'candidate_01_cutout.png',
           cutout_crop: 'candidate_01_cutout_crop.png',
         },
       },
       urls: {
         mask: maskUrl,
         overlay: overlayUrl,
-        cutout: cutoutUrl,
         cutout_crop: cropUrl,
       },
       blobs: {},
@@ -148,17 +148,16 @@ export function createMockCandidates(): CandidateAssets[] {
         id: 2,
         score: 0.741,
         bbox_xyxy_px: [440, 590, 760, 635],
+        crop_box_xyxy_px: [428, 578, 772, 647],
         mask_area_px: 12800,
         files: {
           mask: 'candidate_02_mask.png',
           overlay: 'candidate_02_overlay.png',
-          cutout: 'candidate_02_cutout.png',
         },
       },
       urls: {
         mask: maskUrl,
         overlay: overlayUrl,
-        cutout: cutoutUrl,
       },
       blobs: {},
     },
@@ -174,9 +173,11 @@ export function createMockSegmentResult(candidates = createMockCandidates()): Se
       image_size: [SAMPLE_IMAGE_WIDTH, SAMPLE_IMAGE_HEIGHT],
       confidence_threshold: 0.35,
       crop_padding_px: 12,
+      export_profile: 'lean',
+      overlay_max_side: 768,
       elapsed_ms: 1840,
       num_candidates: candidates.length,
-      num_candidates_total: candidates.length,
+      num_candidates_total: candidates.length > 0 ? 12 : 0,
       candidates: candidates.map((c) => c.meta),
     },
     candidates,
@@ -310,6 +311,12 @@ export function initializeMockStore() {
 
     selectCandidate: (id: number | null) => {
       useAppStore.setState({ selectedCandidateId: id })
+    },
+
+    getFullCutoutBlob: async (candidateId: number) => {
+      const res = useAppStore.getState().result
+      const cand = res?.candidates.find((c) => c.meta.id === candidateId)
+      return cand?.blobs.cutout || null
     },
   })
 }
