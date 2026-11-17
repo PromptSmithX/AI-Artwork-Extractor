@@ -136,6 +136,7 @@ describe('createApiClient', () => {
       prompt: 'dragon',
       bbox: [0.5, 0.5, 0.2, 0.2],
       confidenceThreshold: 0.4,
+      exportProfile: 'lean',
     })
 
     expect(res).toBe(mockResult)
@@ -151,6 +152,7 @@ describe('createApiClient', () => {
     expect(formData.get('prompt')).toBe('dragon')
     expect(formData.get('bbox')).toBe(JSON.stringify([0.5, 0.5, 0.2, 0.2]))
     expect(formData.get('confidence_threshold')).toBe('0.4')
+    expect(formData.get('export_profile')).toBe('lean')
   })
 
   describe('status code and error mappings', () => {
