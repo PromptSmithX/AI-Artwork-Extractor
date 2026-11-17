@@ -6,7 +6,6 @@ import { Tabs } from '../../components/Tabs'
 import { Button } from '../../components/Button'
 import { BackgroundToggle, type PreviewBackground } from './BackgroundToggle'
 import { CompareSlider } from './CompareSlider'
-import { getFullCutoutBlob } from '../export/cutoutHelper'
 
 export interface CandidatePreviewModalProps {
   isOpen: boolean
@@ -59,7 +58,8 @@ export const CandidatePreviewModal: React.FC<CandidatePreviewModalProps> = ({
   const handleDownloadFullCutout = async () => {
     setIsBuildingFull(true)
     try {
-      const blob = await getFullCutoutBlob(candidate)
+      const getFullCutoutBlob = useAppStore.getState().getFullCutoutBlob
+      const blob = await getFullCutoutBlob(candidate.meta.id)
       if (blob) {
         const baseName = image ? image.file.name.replace(/\.[^/.]+$/, '') : 'artwork'
         const padId = String(meta.id).padStart(2, '0')
@@ -76,6 +76,11 @@ export const CandidatePreviewModal: React.FC<CandidatePreviewModalProps> = ({
       setIsBuildingFull(false)
     }
   }
+
+  const canBuildFull = Boolean(
+    candidate.blobs.cutout ||
+      (candidate.blobs.cutout_crop && candidate.meta.crop_box_xyxy_px),
+  )
 
   // Get current image url based on tab
   const getTabUrl = (): string | undefined => {
@@ -244,17 +249,18 @@ export const CandidatePreviewModal: React.FC<CandidatePreviewModalProps> = ({
               variant="secondary"
               size="sm"
               loading={isBuildingFull}
+              disabled={!canBuildFull}
+              title={canBuildFull ? 'Tải ảnh cutout đầy đủ kích thước gốc' : 'Không có dữ liệu crop box để tái tạo full cutout'}
               onClick={handleDownloadFullCutout}
-              title="Tái tạo ảnh tách nền đầy đủ theo kích thước gốc"
             >
-              Tải Full-canvas Cutout
+              Full-canvas cutout PNG
             </Button>
             <Button
               variant="primary"
               size="sm"
               onClick={() => handleDownload(urls.cutout_crop ? 'cutout_crop' : 'cutout')}
             >
-              Tải Cutout PNG (crop)
+              Tải Cutout Crop PNG
             </Button>
           </div>
         </div>

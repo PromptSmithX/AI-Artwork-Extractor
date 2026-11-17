@@ -2,7 +2,6 @@ import React, { useState } from 'react'
 import type { CandidateFileKey } from '../../core/types'
 import { useAppStore } from '../../state/store'
 import { Button } from '../../components/Button'
-import { getFullCutoutBlob } from './cutoutHelper'
 
 export interface ExportPanelProps {
   className?: string
@@ -47,7 +46,8 @@ export const ExportPanel: React.FC<ExportPanelProps> = ({ className = '', style 
     if (!selectedCandidate) return
     setIsBuildingFull(true)
     try {
-      const blob = await getFullCutoutBlob(selectedCandidate)
+      const getFullCutoutBlob = useAppStore.getState().getFullCutoutBlob
+      const blob = await getFullCutoutBlob(selectedCandidate.meta.id)
       if (blob) {
         const padId = String(selectedCandidate.meta.id).padStart(2, '0')
         downloadFile(blob, `${baseName}_cand${padId}_cutout_full.png`)
@@ -59,8 +59,15 @@ export const ExportPanel: React.FC<ExportPanelProps> = ({ className = '', style 
 
   const handleDownloadZip = () => {
     if (!result.zipBlob) return
-    downloadFile(result.zipBlob, `${baseName}_sam3_results.zip`)
+    downloadFile(result.zipBlob, `${baseName}_result.zip`)
   }
+
+  const canBuildFull =
+    selectedCandidate !== undefined &&
+    Boolean(
+      selectedCandidate.blobs.cutout ||
+        (selectedCandidate.blobs.cutout_crop && selectedCandidate.meta.crop_box_xyxy_px),
+    )
 
   return (
     <div
@@ -103,15 +110,17 @@ export const ExportPanel: React.FC<ExportPanelProps> = ({ className = '', style 
               )
             }
           >
-            Cutout PNG (crop)
+            Tải Cutout Crop PNG
           </Button>
           <Button
             variant="secondary"
             size="sm"
             loading={isBuildingFull}
+            disabled={!canBuildFull}
+            title={canBuildFull ? 'Tải ảnh cutout đầy đủ kích thước gốc' : 'Không có dữ liệu crop box để tái tạo full cutout'}
             onClick={handleDownloadFullCutout}
           >
-            Full Cutout PNG
+            Full-canvas cutout PNG
           </Button>
           <Button
             variant="secondary"

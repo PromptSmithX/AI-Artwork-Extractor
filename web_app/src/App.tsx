@@ -17,7 +17,7 @@ import { CandidatePreviewModal } from './features/preview'
 import { ExportPanel } from './features/export'
 import { ShortcutsModal, useGlobalShortcuts } from './features/shortcuts'
 import { useAppStore } from './state/store'
-import { initializeMockStore, setPresetState } from './dev/mockStore'
+import { initializeMockStore, setPresetState, type PresetName } from './dev/mockStore'
 
 function MainLayout() {
   const image = useAppStore((s) => s.image)
@@ -142,7 +142,7 @@ function MainLayout() {
               DEV PRESET:
             </span>
             <select
-              onChange={(e) => setPresetState(e.target.value as any)}
+              onChange={(e) => setPresetState(e.target.value as PresetName)}
               defaultValue="empty"
               style={{
                 fontSize: '11px',
@@ -325,7 +325,7 @@ export default function App() {
       initializeMockStore()
       const preset = params.get('preset')
       if (preset) {
-        setPresetState(preset as any)
+        setPresetState(preset as PresetName)
       }
     } else {
       // Production path: verify API connectivity if baseUrl is configured

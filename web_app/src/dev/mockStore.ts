@@ -321,19 +321,19 @@ export function initializeMockStore() {
   })
 }
 
+export type PresetName =
+  | 'empty'
+  | 'loaded'
+  | 'assistant_ready'
+  | 'segmenting'
+  | 'results'
+  | 'zero_candidates'
+  | 'error'
+
 /**
  * Switch store to a specific preset state for visual review and testing.
  */
-export function setPresetState(
-  preset:
-    | 'empty'
-    | 'loaded'
-    | 'assistant_ready'
-    | 'segmenting'
-    | 'results'
-    | 'zero_candidates'
-    | 'error',
-) {
+export function setPresetState(preset: PresetName) {
   const sampleUrl = createSvgDataUrl(SAMPLE_IMAGE_SVG)
   const mockFile = new File(['mock-img'], 'sample_jacket_patch.png', { type: 'image/png' })
 
