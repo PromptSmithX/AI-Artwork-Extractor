@@ -1,7 +1,7 @@
 """Shared Pydantic schemas for the AI Artwork Extractor API.
 
 This file is the single source of truth shared by the Colab server
-(server_reference/*) and the local Streamlit app (local_app/*).
+(server_reference/*) and the React web UI (web_app/src/core/types.ts mirrors these models).
 Do NOT change it without coordinator approval — see docs/API_CONTRACT.md.
 """
 from __future__ import annotations
