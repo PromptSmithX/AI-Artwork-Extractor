@@ -10,6 +10,11 @@ Base URL = `COLAB_API_URL` (e.g. `https://xxxx.trycloudflare.com`). JSON errors 
 Auth: every endpoint except `GET /health` requires header `Authorization: Bearer <token>`.
 Missing/wrong token → **401**. Token is never accepted via query string.
 
+CORS: the browser Web UI (`web_app/`, Vite dev server) calls the API directly, so the server enables
+`CORSMiddleware` with configurable `cors_origins` (default `["http://localhost:5173", "http://127.0.0.1:5173"]`),
+methods `GET, POST`, headers `Authorization, Content-Type`, `expose_headers=["Content-Disposition"]`,
+`allow_credentials=False`. Preflight `OPTIONS` requests must not require auth.
+
 ### `GET /health` (no auth)
 Response `HealthResponse`:
 ```json
@@ -23,7 +28,10 @@ Response `HealthResponse`:
 | user_request | str | yes | usually Vietnamese, non-empty, ≤ 1000 chars |
 | scope_preference | str | no | `auto` (default) \| `entire_patch` \| `inner_artwork` \| `individual_decoration` |
 
-200 → `PromptSuggestion` JSON (plan §4.4). 503 → assistant unavailable (not loaded / OOM / disabled);
+200 → `PromptSuggestion` JSON (plan §4.4). **`sam_prompt` and every `alternative_prompts` item must be short
+English noun phrases** (SAM 3 only understands English) even when the request is Vietnamese;
+`target_description`, `reason`, `clarification_question` may be Vietnamese. The assistant treats a non-ASCII
+`sam_prompt` as invalid output (retry once), and drops non-ASCII alternatives. 503 → assistant unavailable (not loaded / OOM / disabled);
 502 → model produced invalid JSON after one retry. Never runs SAM.
 
 ### `POST /api/v1/segment` (multipart/form-data)
@@ -37,6 +45,9 @@ Response `HealthResponse`:
 
 200 → `application/zip` (`Content-Disposition: attachment; filename="result.zip"`).
 Zero candidates is still 200 with `num_candidates: 0` (UI shows "no candidate").
+Only the top `max_candidates` (server config, default 12) by score are exported; `num_candidates_total`
+holds how many SAM 3 returned. PNGs use fast compression (`compress_level=1`) and the ZIP uses `ZIP_STORED`
+(PNG is already compressed) to keep large images fast over the tunnel.
 
 ### Status codes
 | code | when |
@@ -64,7 +75,7 @@ Candidate ids are 0-based, ordered by score descending. `metadata.json` example:
 ```json
 {"prompt":"square embroidered fabric patch","mode":"text_box","bbox_input":[0.5,0.4,0.3,0.25],
  "image_size":[1200,900],"confidence_threshold":0.35,"crop_padding_px":12,"elapsed_ms":2310,
- "num_candidates":1,
+ "num_candidates":1,"num_candidates_total":1,
  "candidates":[{"id":0,"score":0.91,"bbox_xyxy_px":[410.0,250.0,780.0,560.0],"mask_area_px":90210,
    "files":{"mask":"candidate_00_mask.png","overlay":"candidate_00_overlay.png",
             "cutout":"candidate_00_cutout.png","cutout_crop":"candidate_00_cutout_crop.png"}}]}
@@ -113,10 +124,14 @@ class FakePromptAssistant   # same interface as QwenPromptAssistant
 
 # api.py
 def create_app(sam_engine, assistant, api_token: str, max_upload_mb: int = 20,
-               default_threshold: float = 0.35) -> FastAPI
+               default_threshold: float = 0.35, max_candidates: int = 12,
+               cors_origins: list[str] | None = None) -> FastAPI
 ```
 
-## 4. Local app expectations (local_app/)
-- Config from `.env`: `COLAB_API_URL`, `COLAB_API_TOKEN`, `REQUEST_TIMEOUT_SECONDS` (default 180); editable in UI sidebar.
-- Box from canvas → original pixel xyxy → normalized `[cx, cy, w, h]` clamped to [0,1].
-- Never auto-run SAM after Qwen, never auto-pick a candidate.
+## 4. Web UI expectations (web_app/, React + Vite + TypeScript) — replaces the Streamlit local_app
+- API URL + token entered in the UI, stored in `localStorage`; token only ever sent in the `Authorization` header.
+- Box drawn on the displayed image → convert with the image's `naturalWidth/naturalHeight` (the browser applies
+  EXIF orientation like the server's `exif_transpose`) → pixel xyxy → normalized `[cx, cy, w, h]` clamped to [0,1].
+- ZIP parsed in the browser with JSZip (`result/metadata.json` + candidate PNGs → object URLs, revoked on replace).
+- Never auto-run SAM after Qwen, never auto-pick a candidate. Warn when the SAM prompt is not English (non-ASCII).
+- TypeScript types in `web_app/src/core/types.ts` mirror `server_reference/schemas.py`.

@@ -96,6 +96,10 @@ class SegmentMetadata(BaseModel):
     crop_padding_px: int = 12
     elapsed_ms: int
     num_candidates: int
+    num_candidates_total: Optional[int] = Field(
+        default=None,
+        description="Candidates SAM 3 returned before the top-N max_candidates cut (>= num_candidates)",
+    )
     candidates: List[CandidateMeta] = Field(default_factory=list)
 
 
