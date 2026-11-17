@@ -33,6 +33,11 @@ function MainLayout() {
   const [isShortcutsModalOpen, setIsShortcutsModalOpen] = useState(false)
   const [theme, setTheme] = useState<'dark' | 'light'>('dark')
 
+  const isMockMode =
+    typeof window !== 'undefined' &&
+    (new URLSearchParams(window.location.search).get('mock') === '1' ||
+      new URLSearchParams(window.location.search).has('preset'))
+
   // Global keyboard shortcuts
   useGlobalShortcuts({
     onOpenShortcuts: () => setIsShortcutsModalOpen(true),
@@ -120,43 +125,45 @@ function MainLayout() {
           </div>
         </div>
 
-        {/* Center: Dev Preset Switcher (allows designer/reviewer to inspect any state instantly) */}
-        <div
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: '6px',
-            background: 'var(--bg-canvas)',
-            padding: '2px 8px',
-            borderRadius: 'var(--radius-sm)',
-            border: '1px solid var(--border-subtle)',
-          }}
-        >
-          <span style={{ fontSize: '10px', fontWeight: 600, color: 'var(--text-muted)' }}>
-            DEMO PRESET:
-          </span>
-          <select
-            onChange={(e) => setPresetState(e.target.value as any)}
-            defaultValue="empty"
+        {/* Center: Dev Preset Switcher (behind ?mock=1 or ?preset=... flag) */}
+        {isMockMode && (
+          <div
             style={{
-              fontSize: '11px',
-              background: 'transparent',
-              border: 'none',
-              color: 'var(--accent-primary)',
-              cursor: 'pointer',
-              fontWeight: 600,
-              padding: '2px 4px',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '6px',
+              background: 'var(--bg-canvas)',
+              padding: '2px 8px',
+              borderRadius: 'var(--radius-sm)',
+              border: '1px solid var(--border-subtle)',
             }}
           >
-            <option value="empty">1. Empty State (Chưa có ảnh)</option>
-            <option value="loaded">2. Image Loaded + Box Drawn</option>
-            <option value="assistant_ready">3. Qwen Suggestion Card</option>
-            <option value="segmenting">4. Running SAM 3 (Loading)</option>
-            <option value="results">5. Candidates Strip &amp; Preview</option>
-            <option value="zero_candidates">6. 0 Candidates Found</option>
-            <option value="error">7. Connection Error Toast</option>
-          </select>
-        </div>
+            <span style={{ fontSize: '10px', fontWeight: 600, color: 'var(--text-muted)' }}>
+              DEV PRESET:
+            </span>
+            <select
+              onChange={(e) => setPresetState(e.target.value as any)}
+              defaultValue="empty"
+              style={{
+                fontSize: '11px',
+                background: 'transparent',
+                border: 'none',
+                color: 'var(--accent-primary)',
+                cursor: 'pointer',
+                fontWeight: 600,
+                padding: '2px 4px',
+              }}
+            >
+              <option value="empty">1. Empty State (Chưa có ảnh)</option>
+              <option value="loaded">2. Image Loaded + Box Drawn</option>
+              <option value="assistant_ready">3. Qwen Suggestion Card</option>
+              <option value="segmenting">4. Running SAM 3 (Loading)</option>
+              <option value="results">5. Candidates Strip &amp; Preview</option>
+              <option value="zero_candidates">6. 0 Candidates Found</option>
+              <option value="error">7. Connection Error Toast</option>
+            </select>
+          </div>
+        )}
 
         {/* Right Top Bar Actions */}
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
@@ -306,16 +313,27 @@ function MainLayout() {
 }
 
 export default function App() {
-  useEffect(() => {
-    // Initialize dev mock actions so UI functions work right away
-    initializeMockStore()
+  const checkHealth = useAppStore((s) => s.checkHealth)
+  const connection = useAppStore((s) => s.connection)
 
+  useEffect(() => {
     const params = new URLSearchParams(window.location.search)
-    const preset = params.get('preset')
-    if (preset) {
-      setPresetState(preset as any)
+    const isMock = params.get('mock') === '1' || params.has('preset')
+
+    if (isMock) {
+      // Mock store for dev review only
+      initializeMockStore()
+      const preset = params.get('preset')
+      if (preset) {
+        setPresetState(preset as any)
+      }
+    } else {
+      // Production path: verify API connectivity if baseUrl is configured
+      if (connection.baseUrl) {
+        checkHealth().catch(() => {})
+      }
     }
-  }, [])
+  }, [checkHealth, connection.baseUrl])
 
   return (
     <ToastProvider>

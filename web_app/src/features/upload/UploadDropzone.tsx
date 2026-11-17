@@ -1,6 +1,7 @@
-import React, { useRef, useState } from 'react'
+import React, { useRef, useState, useEffect } from 'react'
 import { useAppStore } from '../../state/store'
 import { useToast } from '../../components/useToast'
+import { Spinner } from '../../components/Spinner'
 
 export interface UploadDropzoneProps {
   className?: string
@@ -11,7 +12,20 @@ export const UploadDropzone: React.FC<UploadDropzoneProps> = ({ className = '', 
   const fileInputRef = useRef<HTMLInputElement>(null)
   const [isDragOver, setIsDragOver] = useState(false)
   const loadImage = useAppStore((s) => s.loadImage)
+  const imageStatus = useAppStore((s) => s.imageStatus)
+  const imageError = useAppStore((s) => s.imageError)
   const { showToast } = useToast()
+
+  // Display error toast when image loading fails
+  useEffect(() => {
+    if (imageError) {
+      showToast({
+        title: 'Lỗi tải ảnh',
+        message: imageError,
+        kind: 'error',
+      })
+    }
+  }, [imageError, showToast])
 
   const handleFiles = async (files: FileList | null) => {
     if (!files || files.length === 0) return
@@ -113,15 +127,19 @@ export const UploadDropzone: React.FC<UploadDropzoneProps> = ({ className = '', 
           marginBottom: '10px',
         }}
       >
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-          <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
-          <polyline points="17 8 12 3 7 8" />
-          <line x1="12" y1="3" x2="12" y2="15" />
-        </svg>
+        {imageStatus === 'loading' ? (
+          <Spinner size={20} />
+        ) : (
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+            <polyline points="17 8 12 3 7 8" />
+            <line x1="12" y1="3" x2="12" y2="15" />
+          </svg>
+        )}
       </div>
 
       <div style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text-primary)', marginBottom: '4px' }}>
-        Kéo thả hoặc chọn ảnh sản phẩm
+        {imageStatus === 'loading' ? 'Đang đọc kích thước ảnh...' : 'Kéo thả hoặc chọn ảnh sản phẩm'}
       </div>
       <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
         JPG, PNG, WebP tối đa 20MB
