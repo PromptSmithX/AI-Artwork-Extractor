@@ -30,6 +30,8 @@ export interface HealthResponse {
   busy: boolean
 }
 
+export type ExportProfile = 'lean' | 'full'
+
 export type CandidateFileKey = 'mask' | 'overlay' | 'cutout' | 'cutout_crop'
 
 export interface CandidateMeta {
@@ -38,6 +40,8 @@ export interface CandidateMeta {
   /** [x1, y1, x2, y2] in original image pixels. */
   bbox_xyxy_px: [number, number, number, number]
   mask_area_px: number
+  /** [x0, y0, x1, y1) of cutout_crop in original pixels (exclusive end); null if mask empty. */
+  crop_box_xyxy_px?: [number, number, number, number] | null
   /** Relative file names inside result/ (cutout_crop absent when mask empty). */
   files: Partial<Record<CandidateFileKey, string>>
 }
@@ -51,6 +55,9 @@ export interface SegmentMetadata {
   image_size: [number, number]
   confidence_threshold: number
   crop_padding_px: number
+  export_profile?: ExportProfile
+  /** Max side of overlay previews in lean profile; null = full resolution. */
+  overlay_max_side?: number | null
   elapsed_ms: number
   num_candidates: number
   num_candidates_total?: number | null
@@ -82,6 +89,8 @@ export interface SegmentRequest {
   /** Normalized [cx, cy, w, h]; required for box / text_box. */
   bbox?: [number, number, number, number]
   confidenceThreshold?: number
+  /** Default 'lean' (server default). */
+  exportProfile?: ExportProfile
 }
 
 export interface SuggestRequest {

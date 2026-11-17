@@ -42,6 +42,7 @@ English noun phrases** (SAM 3 only understands English) even when the request is
 | prompt | str | text/text_box | user-confirmed prompt; ignored for `box` |
 | bbox | str (JSON) | box/text_box | `[cx, cy, w, h]` normalized 0–1, w,h > 0 |
 | confidence_threshold | float | no | default = server `DEFAULT_CONFIDENCE_THRESHOLD` (0.35), range (0,1] |
+| export_profile | str | no | `lean` (default) \| `full` — see §2 |
 
 200 → `application/zip` (`Content-Disposition: attachment; filename="result.zip"`).
 Zero candidates is still 200 with `num_candidates: 0` (UI shows "no candidate").
@@ -62,23 +63,38 @@ holds how many SAM 3 returned. PNGs use fast compression (`compress_level=1`) an
 | 500 | unexpected inference error (message must not include image data or tokens) |
 
 ## 2. ZIP layout (segment response)
+
+Two export profiles (form field `export_profile`, default `lean`) — real tests showed full-resolution
+files for every candidate make the ZIP 150+ MB for a 2000×1805 photo, far too slow over Quick Tunnel.
+
+| file | lean (default) | full |
+|---|---|---|
+| `candidate_XX_mask.png` | L 0/255, ORIGINAL size (binary, compresses well) | same |
+| `candidate_XX_cutout_crop.png` | RGBA crop = original pixels + alpha, bbox + padding (absent if mask empty) | same |
+| `candidate_XX_overlay.png` | RGB review preview, downscaled so max side ≤ `overlay_max_side` (default 768) | full resolution |
+| `candidate_XX_cutout.png` | **omitted** — the Web UI rebuilds the full-canvas cutout losslessly by placing `cutout_crop` at `crop_box_xyxy_px` on a transparent canvas of `image_size` | RGBA full canvas |
+
 ```
 result/
-  metadata.json                 # SegmentMetadata
-  candidate_00_mask.png         # L mode, 0/255, original image size
-  candidate_00_overlay.png      # RGB, original + colored mask (review only)
-  candidate_00_cutout.png       # RGBA full canvas, RGB = original pixels, alpha = orig_alpha*mask
-  candidate_00_cutout_crop.png  # RGBA crop to mask bbox + crop_padding_px (absent if mask empty)
-  candidate_01_...
+  metadata.json
+  candidate_00_mask.png
+  candidate_00_overlay.png
+  candidate_00_cutout_crop.png
+  [candidate_00_cutout.png]       # full profile only
+  ...
 ```
-Candidate ids are 0-based, ordered by score descending. `metadata.json` example:
+Candidate ids are 0-based, ordered by score descending; `files` lists exactly the files present.
+Cutout RGB = original pixels, alpha = orig_alpha*mask (never generated/inpainted).
+`metadata.json` example (lean):
 ```json
 {"prompt":"square embroidered fabric patch","mode":"text_box","bbox_input":[0.5,0.4,0.3,0.25],
- "image_size":[1200,900],"confidence_threshold":0.35,"crop_padding_px":12,"elapsed_ms":2310,
+ "image_size":[1200,900],"confidence_threshold":0.35,"crop_padding_px":12,
+ "export_profile":"lean","overlay_max_side":768,"elapsed_ms":2310,
  "num_candidates":1,"num_candidates_total":1,
  "candidates":[{"id":0,"score":0.91,"bbox_xyxy_px":[410.0,250.0,780.0,560.0],"mask_area_px":90210,
+   "crop_box_xyxy_px":[398,238,793,573],
    "files":{"mask":"candidate_00_mask.png","overlay":"candidate_00_overlay.png",
-            "cutout":"candidate_00_cutout.png","cutout_crop":"candidate_00_cutout_crop.png"}}]}
+            "cutout_crop":"candidate_00_cutout_crop.png"}}]}
 ```
 
 ## 3. Python module interfaces (server_reference/)

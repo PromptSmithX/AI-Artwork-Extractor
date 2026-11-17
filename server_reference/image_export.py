@@ -76,14 +76,17 @@ def build_result_zip(
     threshold: float,
     elapsed_ms: int,
     crop_padding_px: int = 12,
+    max_candidates: int = 12,
 ) -> bytes:
     """Export segmentation results into an in-memory ZIP package per contract §2.
 
     Returns the raw ZIP bytes without creating any temporary files on disk.
+    Fast export: ZIP_STORED, PNG compress_level=1, top max_candidates cut,
+    and array buffers reused across candidates.
     """
     w, h = image.width, image.height
     masks = normalize_masks(result.masks, (w, h))
-    num_candidates = masks.shape[0]
+    num_candidates_total = masks.shape[0]
 
     # Scores and boxes
     scores = (
@@ -94,14 +97,17 @@ def build_result_zip(
     boxes = (
         result.boxes_xyxy
         if hasattr(result.boxes_xyxy, "ndim") and result.boxes_xyxy.ndim == 2
-        else np.zeros((num_candidates, 4), dtype=np.float32)
+        else np.zeros((num_candidates_total, 4), dtype=np.float32)
     )
 
     # Sort candidate indices by score descending
-    if num_candidates > 0 and len(scores) >= num_candidates:
-        order = np.argsort(-scores[:num_candidates])
+    if num_candidates_total > 0 and len(scores) >= num_candidates_total:
+        order = np.argsort(-scores[:num_candidates_total])
     else:
-        order = np.arange(num_candidates)
+        order = np.arange(num_candidates_total)
+
+    if max_candidates is not None and max_candidates > 0:
+        order = order[:max_candidates]
 
     # Prepare base RGBA numpy array
     if image.mode == "RGBA":
@@ -109,10 +115,21 @@ def build_result_zip(
     else:
         source_rgba = np.array(image.convert("RGBA"))
 
+    orig_alpha = source_rgba[:, :, 3].astype(np.uint16)
+    has_orig_transparency = bool((orig_alpha < 255).any())
+
+    # Pre-allocate reusable cutout array (RGB channels stay identical to source_rgba)
+    cutout_arr = source_rgba.copy()
+
+    # Pre-allocate reusable RGB overlay array
+    base_rgb = source_rgba[:, :, :3]
+    overlay_arr = base_rgb.copy()
+    tint = np.array([255, 40, 170], dtype=np.uint16)
+
     candidates_meta: List[CandidateMeta] = []
     zip_buffer = io.BytesIO()
 
-    with zipfile.ZipFile(zip_buffer, mode="w", compression=zipfile.ZIP_DEFLATED) as zf:
+    with zipfile.ZipFile(zip_buffer, mode="w", compression=zipfile.ZIP_STORED) as zf:
         for new_id, orig_idx in enumerate(order):
             mask = masks[orig_idx]
             mask_u8 = mask.astype(np.uint8) * 255
@@ -122,34 +139,31 @@ def build_result_zip(
             mask_filename = f"candidate_{new_id:02d}_mask.png"
             mask_pil = Image.fromarray(mask_u8, mode="L")
             mask_bytes = io.BytesIO()
-            mask_pil.save(mask_bytes, format="PNG")
+            mask_pil.save(mask_bytes, format="PNG", compress_level=1)
             zf.writestr(f"result/{mask_filename}", mask_bytes.getvalue())
 
             # 2. Cutout PNG (RGBA, preserving original RGB and multiplying alpha)
-            cutout = source_rgba.copy()
-            original_alpha = cutout[:, :, 3].astype(np.uint16)
-            cutout[:, :, 3] = ((original_alpha * mask_u8.astype(np.uint16)) // 255).astype(np.uint8)
+            if has_orig_transparency:
+                cutout_arr[:, :, 3] = ((orig_alpha * mask_u8.astype(np.uint16)) // 255).astype(np.uint8)
+            else:
+                cutout_arr[:, :, 3] = mask_u8
 
             cutout_filename = f"candidate_{new_id:02d}_cutout.png"
-            cutout_pil = Image.fromarray(cutout, mode="RGBA")
+            cutout_pil = Image.fromarray(cutout_arr, mode="RGBA")
             cutout_bytes = io.BytesIO()
-            cutout_pil.save(cutout_bytes, format="PNG")
+            cutout_pil.save(cutout_bytes, format="PNG", compress_level=1)
             zf.writestr(f"result/{cutout_filename}", cutout_bytes.getvalue())
 
             # 3. Overlay PNG (RGB, colored mask composite for review)
-            color_layer = np.zeros_like(source_rgba)
-            color_layer[:, :, 0] = 255
-            color_layer[:, :, 1] = 40
-            color_layer[:, :, 2] = 170
-            color_layer[:, :, 3] = (mask.astype(np.uint8) * 110)
-            composite = Image.alpha_composite(
-                Image.fromarray(source_rgba), Image.fromarray(color_layer, mode="RGBA")
-            )
-            overlay_pil = composite.convert("RGB")
+            overlay_arr[mask] = (
+                (base_rgb[mask].astype(np.uint16) * 145 + tint * 110 + 127) // 255
+            ).astype(np.uint8)
             overlay_filename = f"candidate_{new_id:02d}_overlay.png"
+            overlay_pil = Image.fromarray(overlay_arr, mode="RGB")
             overlay_bytes = io.BytesIO()
-            overlay_pil.save(overlay_bytes, format="PNG")
+            overlay_pil.save(overlay_bytes, format="PNG", compress_level=1)
             zf.writestr(f"result/{overlay_filename}", overlay_bytes.getvalue())
+            overlay_arr[mask] = base_rgb[mask]
 
             # 4. Cutout Crop (clamped to image; absent if mask is empty)
             ys, xs = np.where(mask)
@@ -161,10 +175,11 @@ def build_result_zip(
                 y0 = max(0, int(ys.min()) - crop_padding_px)
                 y1 = min(h, int(ys.max()) + crop_padding_px + 1)
 
-                crop_pil = cutout_pil.crop((x0, y0, x1, y1))
+                crop_arr = cutout_arr[y0:y1, x0:x1]
+                crop_pil = Image.fromarray(crop_arr, mode="RGBA")
                 crop_filename = f"candidate_{new_id:02d}_cutout_crop.png"
                 crop_bytes = io.BytesIO()
-                crop_pil.save(crop_bytes, format="PNG")
+                crop_pil.save(crop_bytes, format="PNG", compress_level=1)
                 zf.writestr(f"result/{crop_filename}", crop_bytes.getvalue())
 
             # Candidate bbox
@@ -202,6 +217,7 @@ def build_result_zip(
             crop_padding_px=crop_padding_px,
             elapsed_ms=elapsed_ms,
             num_candidates=len(candidates_meta),
+            num_candidates_total=num_candidates_total,
             candidates=candidates_meta,
         )
 

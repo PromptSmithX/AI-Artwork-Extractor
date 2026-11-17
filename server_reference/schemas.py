@@ -79,6 +79,10 @@ class CandidateMeta(BaseModel):
     score: float
     bbox_xyxy_px: List[float] = Field(..., min_length=4, max_length=4)
     mask_area_px: int
+    crop_box_xyxy_px: Optional[List[int]] = Field(
+        default=None,
+        description="[x0, y0, x1, y1) of cutout_crop inside the original image (exclusive x1/y1); null if mask empty",
+    )
     files: dict = Field(
         default_factory=dict,
         description="Relative names inside result/: mask, overlay, cutout, cutout_crop (may be absent if mask empty)",
@@ -94,6 +98,10 @@ class SegmentMetadata(BaseModel):
     image_size: List[int] = Field(..., min_length=2, max_length=2, description="[width, height]")
     confidence_threshold: float
     crop_padding_px: int = 12
+    export_profile: str = Field(default="lean", description="'lean' (default) or 'full'")
+    overlay_max_side: Optional[int] = Field(
+        default=None, description="Max side of overlay preview PNGs in lean profile; null = full resolution"
+    )
     elapsed_ms: int
     num_candidates: int
     num_candidates_total: Optional[int] = Field(
