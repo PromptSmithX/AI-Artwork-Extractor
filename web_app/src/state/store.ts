@@ -3,6 +3,10 @@
  * UI (W8) reads state via useAppStore(selector) and calls actions only — no fetch in components.
  */
 import { create } from 'zustand'
+import { createApiClient, type ApiClient } from '../core/api/client'
+import { ApiError } from '../core/api/errors'
+import { loadConnectionConfig, saveConnectionConfig } from '../core/config/storage'
+import { boxToNormCxCyWh, isUsableBox } from '../core/geometry/box'
 import type {
   BoxXYXY,
   ConnectionConfig,
@@ -12,7 +16,6 @@ import type {
   ScopePreference,
   SegmentResult,
 } from '../core/types'
-import type { ApiError } from '../core/api/errors'
 
 export type RequestStatus = 'idle' | 'loading' | 'success' | 'error'
 
@@ -33,6 +36,8 @@ export interface AppState {
 
   // input
   image: LoadedImage | null
+  imageStatus?: RequestStatus
+  imageError?: string | null
   mode: Mode
   box: BoxXYXY | null
   prompt: string
@@ -72,43 +77,397 @@ export interface AppState {
   selectCandidate: (id: number | null) => void
 }
 
-const notImplemented = () => {
-  throw new Error('not implemented (W7)')
+type ApiClientFactory = (config: ConnectionConfig) => ApiClient
+
+let apiClientFactory: ApiClientFactory = createApiClient
+
+/**
+ * Dependency injection hook for tests to mock ApiClient.
+ */
+export function setApiClientFactory(factory: ApiClientFactory | null): void {
+  apiClientFactory = factory ?? createApiClient
 }
 
-export const useAppStore = create<AppState>()(() => ({
-  connection: { baseUrl: '', token: '', timeoutMs: 180_000 },
+function getApiClient(config: ConnectionConfig): ApiClient {
+  return apiClientFactory(config)
+}
+
+export type ImageDimensionReader = (
+  file: File,
+  objectUrl: string,
+) => Promise<{ naturalWidth: number; naturalHeight: number }>
+
+async function defaultImageDimensionReader(
+  file: File,
+  objectUrl: string,
+): Promise<{ naturalWidth: number; naturalHeight: number }> {
+  if (typeof createImageBitmap === 'function') {
+    try {
+      const bmp = await createImageBitmap(file, { imageOrientation: 'from-image' })
+      const dims = { naturalWidth: bmp.width, naturalHeight: bmp.height }
+      bmp.close?.()
+      if (dims.naturalWidth > 0 && dims.naturalHeight > 0) {
+        return dims
+      }
+    } catch {
+      // Fallback to Image element
+    }
+  }
+
+  if (typeof Image !== 'undefined') {
+    return new Promise((resolve, reject) => {
+      const img = new Image()
+      img.onload = () => {
+        resolve({
+          naturalWidth: img.naturalWidth || img.width,
+          naturalHeight: img.naturalHeight || img.height,
+        })
+      }
+      img.onerror = (e) => {
+        reject(new Error(`Failed to decode image: ${e}`))
+      }
+      img.src = objectUrl
+    })
+  }
+
+  throw new Error('No image decoding facility available in environment')
+}
+
+let imageDimensionReader: ImageDimensionReader = defaultImageDimensionReader
+
+/**
+ * Dependency injection hook for tests to mock image dimension reading.
+ */
+export function setImageDimensionReader(reader: ImageDimensionReader | null): void {
+  imageDimensionReader = reader ?? defaultImageDimensionReader
+}
+
+let activeAbortController: AbortController | null = null
+
+export const useAppStore = create<AppState>()((set, get) => ({
+  connection: loadConnectionConfig(),
   health: null,
   healthStatus: 'idle',
   healthError: null,
+
   image: null,
+  imageStatus: 'idle',
+  imageError: null,
   mode: 'text',
   box: null,
   prompt: '',
   userRequest: '',
   scopePreference: 'auto',
   confidenceThreshold: 0.35,
+
   suggestion: null,
   suggestStatus: 'idle',
   suggestError: null,
+
   result: null,
   segmentStatus: 'idle',
   segmentError: null,
   segmentStartedAt: null,
   selectedCandidateId: null,
-  setConnection: notImplemented,
-  checkHealth: async () => notImplemented(),
-  loadImage: async () => notImplemented(),
-  clearImage: notImplemented,
-  setMode: notImplemented,
-  setBox: notImplemented,
-  setPrompt: notImplemented,
-  setUserRequest: notImplemented,
-  setScopePreference: notImplemented,
-  setConfidenceThreshold: notImplemented,
-  askAssistant: async () => notImplemented(),
-  usePrompt: notImplemented,
-  runSegmentation: async () => notImplemented(),
-  cancelSegmentation: notImplemented,
-  selectCandidate: notImplemented,
+
+  setConnection: (patch: Partial<ConnectionConfig>) => {
+    set((state) => {
+      const newConfig = { ...state.connection, ...patch }
+      saveConnectionConfig(newConfig)
+      return { connection: newConfig }
+    })
+  },
+
+  checkHealth: async () => {
+    set({ healthStatus: 'loading', healthError: null })
+    try {
+      const client = getApiClient(get().connection)
+      const res = await client.health()
+      set({ health: res, healthStatus: 'success', healthError: null })
+    } catch (err: unknown) {
+      set({
+        health: null,
+        healthStatus: 'error',
+        healthError: err instanceof ApiError ? err : new ApiError('server', null, String(err)),
+      })
+    }
+  },
+
+  loadImage: async (file: File) => {
+    const allowed = ['image/jpeg', 'image/png', 'image/webp']
+    if (!file.type || !allowed.includes(file.type.toLowerCase())) {
+      const errorMsg = `Unsupported image type "${file.type}". Allowed types: JPEG, PNG, WebP.`
+      set({ imageStatus: 'error', imageError: errorMsg })
+      return
+    }
+
+    const MAX_SIZE = 20 * 1024 * 1024
+    if (file.size > MAX_SIZE) {
+      const errorMsg = `Image size (${(file.size / (1024 * 1024)).toFixed(1)} MB) exceeds 20 MB limit.`
+      set({ imageStatus: 'error', imageError: errorMsg })
+      return
+    }
+
+    const prevImage = get().image
+    const prevResult = get().result
+
+    if (prevImage?.url) {
+      URL.revokeObjectURL(prevImage.url)
+    }
+    if (prevResult) {
+      prevResult.dispose()
+    }
+
+    const url = URL.createObjectURL(file)
+    let dimensions: { naturalWidth: number; naturalHeight: number }
+    try {
+      dimensions = await imageDimensionReader(file, url)
+    } catch (err) {
+      URL.revokeObjectURL(url)
+      const errorMsg = err instanceof Error ? err.message : String(err)
+      set({ imageStatus: 'error', imageError: errorMsg })
+      return
+    }
+
+    set({
+      image: {
+        file,
+        url,
+        naturalWidth: dimensions.naturalWidth,
+        naturalHeight: dimensions.naturalHeight,
+      },
+      imageStatus: 'success',
+      imageError: null,
+      box: null,
+      suggestion: null,
+      suggestStatus: 'idle',
+      suggestError: null,
+      result: null,
+      segmentStatus: 'idle',
+      segmentError: null,
+      segmentStartedAt: null,
+      selectedCandidateId: null,
+    })
+  },
+
+  clearImage: () => {
+    const prevImage = get().image
+    const prevResult = get().result
+
+    if (prevImage?.url) {
+      URL.revokeObjectURL(prevImage.url)
+    }
+    if (prevResult) {
+      prevResult.dispose()
+    }
+
+    set({
+      image: null,
+      imageStatus: 'idle',
+      imageError: null,
+      box: null,
+      suggestion: null,
+      suggestStatus: 'idle',
+      suggestError: null,
+      result: null,
+      segmentStatus: 'idle',
+      segmentError: null,
+      segmentStartedAt: null,
+      selectedCandidateId: null,
+    })
+  },
+
+  setMode: (mode: Mode) => {
+    set({ mode })
+  },
+
+  setBox: (box: BoxXYXY | null) => {
+    set({ box })
+  },
+
+  setPrompt: (prompt: string) => {
+    set({ prompt })
+  },
+
+  setUserRequest: (userRequest: string) => {
+    set({ userRequest })
+  },
+
+  setScopePreference: (scopePreference: ScopePreference) => {
+    set({ scopePreference })
+  },
+
+  setConfidenceThreshold: (confidenceThreshold: number) => {
+    set({ confidenceThreshold })
+  },
+
+  askAssistant: async () => {
+    const { image, userRequest, scopePreference, connection, prompt, suggestion } = get()
+
+    if (!image) {
+      const err = new ApiError('validation', 422, 'Cannot request prompt suggestion without an image.')
+      set({ suggestStatus: 'error', suggestError: err })
+      return
+    }
+
+    const trimmedReq = (userRequest || '').trim()
+    if (!trimmedReq) {
+      const err = new ApiError('validation', 422, 'User request cannot be empty.')
+      set({ suggestStatus: 'error', suggestError: err })
+      return
+    }
+
+    set({ suggestStatus: 'loading', suggestError: null })
+
+    try {
+      const client = getApiClient(connection)
+      const res = await client.suggestPrompt({
+        image: image.file,
+        filename: image.file.name,
+        userRequest: trimmedReq,
+        scopePreference,
+      })
+
+      const prevSuggestedPrompt = suggestion?.sam_prompt
+      const shouldUpdatePrompt = !prompt || prompt === prevSuggestedPrompt
+
+      set({
+        suggestion: res,
+        suggestStatus: 'success',
+        suggestError: null,
+        prompt: shouldUpdatePrompt ? res.sam_prompt : prompt,
+      })
+    } catch (err: unknown) {
+      set({
+        suggestStatus: 'error',
+        suggestError: err instanceof ApiError ? err : new ApiError('server', null, String(err)),
+      })
+    }
+  },
+
+  usePrompt: (prompt: string) => {
+    set({ prompt })
+  },
+
+  runSegmentation: async () => {
+    const { image, mode, prompt, box, confidenceThreshold, connection, result: prevResult } = get()
+
+    if (!image) {
+      const err = new ApiError('validation', 422, 'Cannot run segmentation without an image.')
+      set({ segmentStatus: 'error', segmentError: err })
+      return
+    }
+
+    const trimmedPrompt = (prompt || '').trim()
+    if ((mode === 'text' || mode === 'text_box') && !trimmedPrompt) {
+      const err = new ApiError('validation', 422, 'Prompt is required for text and text_box mode.')
+      set({ segmentStatus: 'error', segmentError: err })
+      return
+    }
+
+    if ((mode === 'box' || mode === 'text_box') && !isUsableBox(box)) {
+      const err = new ApiError('validation', 422, 'A usable bounding box is required for box and text_box mode.')
+      set({ segmentStatus: 'error', segmentError: err })
+      return
+    }
+
+    let normBbox: [number, number, number, number] | undefined
+    if ((mode === 'box' || mode === 'text_box') && box) {
+      try {
+        normBbox = boxToNormCxCyWh(box, image.naturalWidth, image.naturalHeight)
+      } catch (err) {
+        const errObj = new ApiError(
+          'validation',
+          422,
+          `Invalid bounding box: ${err instanceof Error ? err.message : String(err)}`,
+        )
+        set({ segmentStatus: 'error', segmentError: errObj })
+        return
+      }
+    }
+
+    if (prevResult) {
+      prevResult.dispose()
+    }
+
+    if (activeAbortController) {
+      activeAbortController.abort()
+    }
+    const controller = new AbortController()
+    activeAbortController = controller
+
+    set({
+      result: null,
+      segmentStatus: 'loading',
+      segmentError: null,
+      segmentStartedAt: Date.now(),
+      selectedCandidateId: null,
+    })
+
+    try {
+      const client = getApiClient(connection)
+      const res = await client.segment(
+        {
+          image: image.file,
+          filename: image.file.name,
+          mode,
+          prompt: mode === 'box' ? undefined : trimmedPrompt,
+          bbox: normBbox,
+          confidenceThreshold,
+        },
+        controller.signal,
+      )
+
+      if (activeAbortController === controller) {
+        activeAbortController = null
+        set({
+          result: res,
+          segmentStatus: 'success',
+          segmentError: null,
+          segmentStartedAt: null,
+          selectedCandidateId: null,
+        })
+      } else {
+        res.dispose()
+      }
+    } catch (err: unknown) {
+      const wasAborted =
+        controller.signal.aborted || (err as Error)?.name === 'AbortError'
+
+      if (activeAbortController === controller) {
+        activeAbortController = null
+      }
+
+      if (wasAborted) {
+        // User cancel: return to idle without error
+        set({
+          segmentStatus: 'idle',
+          segmentError: null,
+          segmentStartedAt: null,
+        })
+        return
+      }
+
+      set({
+        segmentStatus: 'error',
+        segmentError: err instanceof ApiError ? err : new ApiError('server', null, String(err)),
+        segmentStartedAt: null,
+      })
+    }
+  },
+
+  cancelSegmentation: () => {
+    if (activeAbortController) {
+      activeAbortController.abort()
+      activeAbortController = null
+    }
+    set({
+      segmentStatus: 'idle',
+      segmentStartedAt: null,
+    })
+  },
+
+  selectCandidate: (id: number | null) => {
+    set({ selectedCandidateId: id })
+  },
 }))
