@@ -6,6 +6,7 @@ import { Tabs } from '../../components/Tabs'
 import { Button } from '../../components/Button'
 import { BackgroundToggle, type PreviewBackground } from './BackgroundToggle'
 import { CompareSlider } from './CompareSlider'
+import { getFullCutoutBlob } from '../export/cutoutHelper'
 
 export interface CandidatePreviewModalProps {
   isOpen: boolean
@@ -24,6 +25,7 @@ export const CandidatePreviewModal: React.FC<CandidatePreviewModalProps> = ({
 
   const [activeTab, setActiveTab] = useState<PreviewTab>('transparent')
   const [bgMode, setBgMode] = useState<PreviewBackground>('checker')
+  const [isBuildingFull, setIsBuildingFull] = useState(false)
 
   if (!result || selectedCandidateId === null) return null
 
@@ -54,11 +56,32 @@ export const CandidatePreviewModal: React.FC<CandidatePreviewModalProps> = ({
     document.body.removeChild(link)
   }
 
+  const handleDownloadFullCutout = async () => {
+    setIsBuildingFull(true)
+    try {
+      const blob = await getFullCutoutBlob(candidate)
+      if (blob) {
+        const baseName = image ? image.file.name.replace(/\.[^/.]+$/, '') : 'artwork'
+        const padId = String(meta.id).padStart(2, '0')
+        const link = document.createElement('a')
+        const url = URL.createObjectURL(blob)
+        link.href = url
+        link.download = `${baseName}_cand${padId}_cutout_full.png`
+        document.body.appendChild(link)
+        link.click()
+        document.body.removeChild(link)
+        URL.revokeObjectURL(url)
+      }
+    } finally {
+      setIsBuildingFull(false)
+    }
+  }
+
   // Get current image url based on tab
   const getTabUrl = (): string | undefined => {
     switch (activeTab) {
       case 'transparent':
-        return urls.cutout || urls.cutout_crop
+        return urls.cutout_crop || urls.cutout
       case 'overlay':
         return urls.overlay
       case 'mask':
@@ -66,7 +89,7 @@ export const CandidatePreviewModal: React.FC<CandidatePreviewModalProps> = ({
       case 'original':
         return image?.url
       default:
-        return urls.cutout
+        return urls.cutout_crop || urls.cutout
     }
   }
 
@@ -217,16 +240,22 @@ export const CandidatePreviewModal: React.FC<CandidatePreviewModalProps> = ({
                 Tải Mask PNG
               </Button>
             )}
-            {urls.cutout_crop && (
-              <Button variant="secondary" size="sm" onClick={() => handleDownload('cutout_crop')}>
-                Tải Cutout Crop PNG
-              </Button>
-            )}
-            {urls.cutout && (
-              <Button variant="primary" size="sm" onClick={() => handleDownload('cutout')}>
-                Tải Cutout PNG
-              </Button>
-            )}
+            <Button
+              variant="secondary"
+              size="sm"
+              loading={isBuildingFull}
+              onClick={handleDownloadFullCutout}
+              title="Tái tạo ảnh tách nền đầy đủ theo kích thước gốc"
+            >
+              Tải Full-canvas Cutout
+            </Button>
+            <Button
+              variant="primary"
+              size="sm"
+              onClick={() => handleDownload(urls.cutout_crop ? 'cutout_crop' : 'cutout')}
+            >
+              Tải Cutout PNG (crop)
+            </Button>
           </div>
         </div>
       </div>

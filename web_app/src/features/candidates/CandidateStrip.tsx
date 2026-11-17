@@ -109,7 +109,9 @@ export const CandidateStrip: React.FC<CandidateStripProps> = ({
               fontWeight: 600,
             }}
           >
-            {candidates.length}
+            {result.metadata.num_candidates_total && result.metadata.num_candidates_total > candidates.length
+              ? `Hiển thị ${candidates.length}/${result.metadata.num_candidates_total} candidate tốt nhất`
+              : candidates.length}
           </span>
           {result.metadata.elapsed_ms > 0 && (
             <span style={{ color: 'var(--text-muted)' }}>

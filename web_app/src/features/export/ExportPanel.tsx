@@ -1,7 +1,8 @@
-import React from 'react'
+import React, { useState } from 'react'
 import type { CandidateFileKey } from '../../core/types'
 import { useAppStore } from '../../state/store'
 import { Button } from '../../components/Button'
+import { getFullCutoutBlob } from './cutoutHelper'
 
 export interface ExportPanelProps {
   className?: string
@@ -12,6 +13,7 @@ export const ExportPanel: React.FC<ExportPanelProps> = ({ className = '', style 
   const result = useAppStore((s) => s.result)
   const image = useAppStore((s) => s.image)
   const selectedCandidateId = useAppStore((s) => s.selectedCandidateId)
+  const [isBuildingFull, setIsBuildingFull] = useState(false)
 
   if (!result) return null
 
@@ -39,6 +41,20 @@ export const ExportPanel: React.FC<ExportPanelProps> = ({ className = '', style 
     const padId = String(selectedCandidate.meta.id).padStart(2, '0')
     const filename = `${baseName}_cand${padId}_${key}.png`
     downloadFile(blob || url, filename)
+  }
+
+  const handleDownloadFullCutout = async () => {
+    if (!selectedCandidate) return
+    setIsBuildingFull(true)
+    try {
+      const blob = await getFullCutoutBlob(selectedCandidate)
+      if (blob) {
+        const padId = String(selectedCandidate.meta.id).padStart(2, '0')
+        downloadFile(blob, `${baseName}_cand${padId}_cutout_full.png`)
+      }
+    } finally {
+      setIsBuildingFull(false)
+    }
   }
 
   const handleDownloadZip = () => {
@@ -81,16 +97,21 @@ export const ExportPanel: React.FC<ExportPanelProps> = ({ className = '', style 
           <Button
             variant="primary"
             size="sm"
-            onClick={() => handleDownloadCandidateAsset('cutout')}
+            onClick={() =>
+              handleDownloadCandidateAsset(
+                selectedCandidate.urls.cutout_crop ? 'cutout_crop' : 'cutout',
+              )
+            }
           >
-            Tải Cutout PNG
+            Cutout PNG (crop)
           </Button>
           <Button
             variant="secondary"
             size="sm"
-            onClick={() => handleDownloadCandidateAsset('cutout_crop')}
+            loading={isBuildingFull}
+            onClick={handleDownloadFullCutout}
           >
-            Tải Crop PNG
+            Full Cutout PNG
           </Button>
           <Button
             variant="secondary"
